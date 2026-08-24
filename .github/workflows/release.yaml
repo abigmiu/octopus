@@ -6,6 +6,8 @@ on:
       - master
     paths:
       - main.go
+  # 允许手动触发，用于 main.go 未变更但需要重新发布的情况（例如上一次运行中途失败）。
+  workflow_dispatch:
 
 permissions:
   contents: write
