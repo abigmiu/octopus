@@ -15,16 +15,16 @@ func init() {
 }
 
 // migrateDropLegacyGroupColumns 移除旧版分组模式字段，这些字段已不再使用。
-// 旧版 groups 表包含 mode、match_regex、first_token_time_out、session_keep_time，
-// 其中 mode 为 NOT NULL 且无默认值，新版模型不再写入该列，导致创建分组时触发 NOT NULL 约束错误。
-// group_items 表同样遗留了 weight 字段。
+// 旧版 groups 表包含 match_regex、first_token_time_out、session_keep_time，group_items 表遗留了 weight 字段。
+// mode 不在清理范围内: 该列在当前模型中重新启用并承载新的选择模式，AutoMigrate 会在本迁移之前建出它，
+// 删除它会让紧随其后的 007 因 groups.mode 不存在而失败，全新部署将无法启动。
 func migrateDropLegacyGroupColumns(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
 
 	if db.Migrator().HasTable("groups") {
-		legacyGroupColumns := []string{"mode", "match_regex", "first_token_time_out", "session_keep_time"}
+		legacyGroupColumns := []string{"match_regex", "first_token_time_out", "session_keep_time"}
 		for _, column := range legacyGroupColumns {
 			if err := dropColumnIfExists(db, &model.Group{}, "groups", column); err != nil {
 				return err
