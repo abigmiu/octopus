@@ -4,6 +4,7 @@ import { flushSync } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { useTranslations } from 'use-intl';
 import Logo from '@/components/modules/logo';
+import { useSessionNotifications } from '@/hooks/useSessionNotifications';
 import { NAV_ITEMS, useAppStore } from '@/stores/app';
 import { preloadPage } from '@/lib/page-preload';
 import { cn } from '@/lib/utils';
@@ -18,6 +19,9 @@ export function AppShell({ children, actions }: { children: ReactNode; actions?:
     const [hoveredIndex, setHoveredIndex] = useState<number | null>(null); // hoveredIndex 表示当前悬浮项的位置。
     const [isNavHovered, setIsNavHovered] = useState(false); // isNavHovered 表示悬浮背景是否显示。
     const hoverIndicatorRef = useRef<HTMLSpanElement>(null); // hoverIndicatorRef 用于在淡入前确认悬浮背景的新位置。
+
+    // 会话流在应用层保持唯一订阅，日志页复用同一份快照。
+    useSessionNotifications();
 
     return (
         <div className="mx-auto flex h-dvh max-w-6xl animate-in flex-col overflow-hidden px-3 fade-in duration-300 md:grid md:grid-cols-[auto_1fr] md:grid-rows-[auto_minmax(0,1fr)] md:gap-x-6 md:px-6">

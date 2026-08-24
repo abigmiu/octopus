@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/model"
+	"github.com/bestruirui/octopus/internal/utils/xstrings"
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/auth"
 	"github.com/looplj/axonhub/llm/httpclient"
@@ -18,6 +19,7 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
 	"github.com/tidwall/sjson"
 )
+
 // buildOutbound 按渠道协议构造出站转换器, 并判断客户端请求能否直接透传。
 func buildOutbound(channel model.Channel, format llm.APIFormat) (transformer.Outbound, bool, error) {
 	key := auth.NewStaticKeyProvider(channel.Key)
@@ -65,6 +67,13 @@ func applyChannelConfig(channel model.Channel, request *httpclient.Request) erro
 		request.Body = body
 		if len(request.JSONBody) > 0 {
 			request.JSONBody = slices.Clone(body)
+		}
+	}
+
+	// 渠道声明的不转发名单在自定义 Header 之前应用, 使同名的自定义 Header 仍能生效。
+	if channel.HeaderBlocklist != nil {
+		for _, name := range xstrings.SplitCompact(",", *channel.HeaderBlocklist) {
+			request.Headers.Del(name)
 		}
 	}
 

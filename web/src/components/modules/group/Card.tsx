@@ -290,7 +290,11 @@ export const GroupCard = memo(function GroupCard({ group, now }: { group: Group;
                     onReorder={setMembers}
                     onRemove={handleRemoveMember}
                     onActivate={group.mode === 'manual' ? handleActivate : undefined}
-                    activeItemId={group.mode === 'failover' ? group.runtime?.current_item_id : group.active_item_id}
+                    activeItemId={group.mode === 'failover'
+                        ? group.runtime?.current_item_id
+                        : group.mode === 'manual'
+                            ? group.active_item_id
+                            : undefined}
                     group={group}
                     now={now}
                     onDragStart={handleDragStart}

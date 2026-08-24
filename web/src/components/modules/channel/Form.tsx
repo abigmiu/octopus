@@ -21,6 +21,7 @@ export interface ChannelFormData {
     base_url: string;
     key: string;
     custom_header: Channel['custom_header'];
+    header_blocklist: string;
     channel_proxy: string;
     param_override: string;
     model: string;
@@ -399,6 +400,20 @@ export function ChannelForm({
                                     </div>
                                 ))}
                             </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label htmlFor={`${idPrefix}-header-blocklist`} className="text-sm font-medium text-card-foreground">
+                                {t('headerBlocklist')}
+                            </label>
+                            <textarea
+                                id={`${idPrefix}-header-blocklist`}
+                                value={formData.header_blocklist}
+                                onChange={(e) => onFormDataChange({ ...formData, header_blocklist: e.target.value })}
+                                placeholder={t('headerBlocklistPlaceholder')}
+                                className="min-h-20 w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                            <p className="text-xs text-muted-foreground">{t('headerBlocklistHint')}</p>
                         </div>
 
                         <div className="space-y-2">

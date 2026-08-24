@@ -1,4 +1,5 @@
 import { SettingAppearance } from './Appearance';
+import { SettingNotification } from './Notification';
 import { SettingSystem } from './System';
 import { SettingAPIKey } from './APIKey';
 import { SettingLLMPrice } from './LLMPrice';
@@ -15,6 +16,7 @@ export function Setting() {
             <div className="columns-1 gap-4 md:columns-2 *:mb-4 *:break-inside-avoid">
                 <SettingInfo />
                 <SettingAppearance />
+                <SettingNotification />
                 <SettingAccount />
                 <SettingSystem />
                 <SettingLog />

@@ -61,7 +61,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		}
 
 		// 客户端请求的模型名称即分组名称; 分组不存在说明模型名错误, 等待也不会出现该分组。
-		if _, err := op.GroupGetByName(metadata.Model); err != nil {
+		initialGroup, err := op.GroupGetByName(metadata.Model)
+		if err != nil {
 			rejectRequest(c, inbound, errors.New("model not found"))
 			return
 		}
@@ -72,9 +73,17 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 		failedItemID := 0 // 当前累计连续失败次数的成员 ID。
 		failures := 0     // 该成员包含首次请求的连续失败次数。
 
+		// 会话身份由客户端信号或请求内容派生, 与分组模式无关: 即使当前不是会话模式, 日志也按会话分组展示。
+		identity := identifySession(c.Request.Header, raw.Body)
+		sessionID := identity.id
+		if sessionID != "" {
+			request.setSession(sessionID, identity.label)
+			registerSessionRequest(identity, metadata.Model, request.ID, initialGroup.Mode == model.GroupModeSession)
+		}
+
 		for {
 			if ctx.Err() != nil {
-				request.markCanceled(ctx.Err(), "", nil)
+				request.markCanceled(clientCanceledReason, "", nil)
 				return
 			}
 
@@ -87,14 +96,42 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				continue
 			}
 
-			// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员。
-			// 没有目标时等待重新选择, 期间人工切换渠道, 补齐成员或成员冷却到期即可让请求继续。
-			item := pickGroupItem(group)
-			if item.ID == 0 {
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+			// 定位本轮目标: 会话模式由会话绑定给出任意渠道与模型, 其余模式仍从分组成员中选择。
+			var item model.GroupItem
+			if group.Mode == model.GroupModeSession {
+				// 会话标识缺失说明请求正文无法派生身份, 该请求无法参与会话选路。
+				if sessionID == "" {
+					err := errors.New("session mode requires an identifiable client session")
+					request.markFailed(err, "", nil)
+					rejectRequest(c, inbound, err)
 					return
 				}
-				continue
+				// 尚未绑定时阻塞等待人工选择, 期间该会话在前端显示为待选。
+				target, ok, waitErr := awaitSessionTarget(ctx, sessionID)
+				if !ok {
+					if ctx.Err() != nil {
+						request.markCanceled(clientCanceledReason, "", nil)
+						return
+					}
+					if waitErr == nil {
+						waitErr = errors.New("no channel selected for this session")
+					}
+					recordSessionFailure(sessionID, waitErr.Error())
+					request.markFailed(waitErr, "", nil)
+					rejectRequest(c, inbound, waitErr)
+					return
+				}
+				item = model.GroupItem{ChannelID: target.channelID, ModelName: target.modelName}
+			} else {
+				// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员。
+				// 没有目标时等待重新选择, 期间人工切换渠道, 补齐成员或成员冷却到期即可让请求继续。
+				item = pickGroupItem(group)
+				if item.ID == 0 {
+					if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+						return
+					}
+					continue
+				}
 			}
 
 			// 成员指向的渠道已被删除时同样等待, 该成员可能很快被改回可用渠道。
@@ -124,8 +161,17 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			}
 
 			// 为本轮上游调用建立独立取消入口并登记当前目标。
+			// 首个有效响应的等待时限由分组配置给出: 超时以明确原因结束本轮, 而不是把请求挂到客户端自己放弃。
+			responseTimeout := time.Duration(group.RelayConfig.MemberNonStreamResponseTimeoutSeconds) * time.Second
+			if metadata.Streaming {
+				responseTimeout = time.Duration(group.RelayConfig.MemberStreamFirstEventTimeoutSeconds) * time.Second
+			}
 			roundCtx, cancelRound := context.WithCancel(ctx)
 			request.startRound(cancelRound, channel.Name, item.ModelName)
+			// 非会话模式的目标由分组路由决定, 逐轮同步到会话卡片以便一并查看当前渠道。
+			if group.Mode != model.GroupModeSession {
+				recordSessionTarget(sessionID, channel.Name, item.ModelName)
+			}
 
 			// 按渠道协议构造出站转换器并确定是否可以直接透传。
 			roundStartedAt := time.Now() // 本轮上游调用的开始时间, 用于统计首个有效响应耗时。
@@ -137,31 +183,48 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if err == nil {
 				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
-					result, err = sendPassthrough(roundCtx, format, raw, channel, outbound, metadata.Streaming)
+					result, err = sendPassthrough(roundCtx, format, raw, channel, outbound, metadata.Streaming, responseTimeout)
 				} else {
-					result, err = sendConverted(roundCtx, format, raw, channel, outbound, metadata.Streaming)
+					result, err = sendConverted(roundCtx, format, raw, channel, outbound, metadata.Streaming, responseTimeout)
 				}
 			}
 
 			if err != nil {
 				// 记录本轮上游调用已经结束及其失败原因。
-				request.finishRound(err.Error())
+				request.finishRound(err.Error(), ctx.Err() != nil)
 				// 父上下文结束说明客户端已经取消, 归还探测占用并以取消终态结束请求。
 				if ctx.Err() != nil {
 					releaseRouteProbe(group, item.ID)
-					request.markCanceled(ctx.Err(), "", nil)
+					cancelRound()
+					request.markCanceled(clientCanceledReason, "", nil)
 					return
 				}
 				// 仅本轮上下文结束说明该轮被人工中止, 不计失败也不等待, 立即重新选择目标。
 				if roundCtx.Err() != nil {
 					releaseRouteProbe(group, item.ID)
+					cancelRound()
 					continue
 				}
 				cancelRound()
 				// 本轮真实失败只计入当前渠道和成员, 客户端取消与人工中止不计为渠道故障。
 				metrics := model.StatsMetrics{WaitTime: time.Since(roundStartedAt).Milliseconds(), RequestFailed: 1}
 				_ = op.StatsChannelUpdate(channel.ID, metrics)
-				_ = op.StatsModelUpdate(model.StatsModel{ID: item.ID, Name: item.ModelName, ChannelID: channel.ID, StatsMetrics: metrics})
+				_ = op.StatsModelUpdate(channel.ID, item.ModelName, metrics)
+				recordSessionFailure(sessionID, err.Error())
+
+				// 会话模式的目标由人工绑定, 不切换渠道: 按配置重试同一目标, 耗尽后失败并保留绑定等待人工换目标。
+				if group.Mode == model.GroupModeSession {
+					failures++
+					if failures >= group.RelayConfig.MemberMaxAttempts {
+						request.markFailed(err, "", nil)
+						rejectRequest(c, inbound, err)
+						return
+					}
+					if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+						return
+					}
+					continue
+				}
 
 				// 成员改变时重新开始累计该成员在本请求内的连续失败次数。
 				if failedItemID == item.ID {
@@ -180,7 +243,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				continue
 			}
 			// 记录本轮已经取得可提交的上游响应。
-			request.finishRound("")
+			request.finishRound("", false)
 			roundWaitTime := time.Since(roundStartedAt).Milliseconds() // 流式响应只统计等待首帧的时间。
 			// 上游成功后解除该成员的冷却与探测占用, 并按路由配置开始亲和。
 			recordRouteSuccess(group, item.ID)
@@ -200,7 +263,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				metrics.WaitTime = roundWaitTime
 				metrics.RequestSuccess = 1
 				_ = op.StatsChannelUpdate(channel.ID, metrics)
-				_ = op.StatsModelUpdate(model.StatsModel{ID: item.ID, Name: item.ModelName, ChannelID: channel.ID, StatsMetrics: metrics})
+				_ = op.StatsModelUpdate(channel.ID, item.ModelName, metrics)
+				recordSessionSuccess(sessionID, result.usage, metrics)
 				request.markCommitted()
 				n, err := c.Writer.Write(result.body)
 				if err == nil && n != len(result.body) {
@@ -208,7 +272,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 				if err != nil {
 					if ctx.Err() != nil {
-						request.markCanceled(ctx.Err(), string(result.body), result.usage)
+						request.markCanceled(writeCanceledReason, string(result.body), result.usage)
 					} else {
 						request.markFailed(err, string(result.body), result.usage)
 					}
@@ -277,15 +341,17 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				metrics.RequestFailed = 1
 			}
 			_ = op.StatsChannelUpdate(channel.ID, metrics)
-			_ = op.StatsModelUpdate(model.StatsModel{ID: item.ID, Name: item.ModelName, ChannelID: channel.ID, StatsMetrics: metrics})
+			_ = op.StatsModelUpdate(channel.ID, item.ModelName, metrics)
 			if err != nil {
+				recordSessionFailure(sessionID, err.Error())
 				if ctx.Err() != nil {
-					request.markCanceled(ctx.Err(), string(responseBody), result.usage)
+					request.markCanceled(writeCanceledReason, string(responseBody), result.usage)
 				} else {
 					request.markFailed(err, string(responseBody), result.usage)
 				}
 				return
 			}
+			recordSessionSuccess(sessionID, result.usage, metrics)
 			request.markSucceeded(string(responseBody), result.usage)
 			return
 		}

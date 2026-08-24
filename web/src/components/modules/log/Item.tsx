@@ -8,6 +8,7 @@ import { useTheme } from '@/provider/theme';
 import { type RelayLogOverview, useLogRequestBody, useLogResponseBody, useStopRound } from '@/api/log';
 import { useGroupList, useUpdateGroupActiveItem } from '@/api/group';
 import { useModelChannelList } from '@/api/model';
+import { useBindSession, useSessions } from '@/api/session';
 import { getModelIcon } from '@/lib/model-icons';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -71,14 +72,6 @@ function LogMetrics({ log, now, brandColor, variant }: { log: RelayLogOverview; 
     ));
 }
 
-// ObservedRound 保存弹窗打开期间观察到的一轮上游请求状态。
-interface ObservedRound {
-    round: number; // 当前请求内递增的轮次序号。
-    channel: string; // 本轮实际请求的渠道名称。
-    error: string; // 本轮最近一次上游错误。
-    sending: boolean; // 本轮是否仍在等待上游响应。
-}
-
 // JsonContent 渲染请求或响应正文, 能解析为 JSON 时使用折叠视图, 否则按纯文本展示。
 function JsonContent({ content, fallbackText }: { content: string | object | undefined; fallbackText: string }) {
     const { resolvedTheme } = useTheme();
@@ -132,42 +125,45 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
     const t = useTranslations('log.card');
     const statusT = useTranslations('log.status');
     const [leftTab, setLeftTab] = useState<'request' | 'group'>('group');
-    const [rounds, setRounds] = useState<ObservedRound[]>([]);
     const [detailReady, setDetailReady] = useState(false); // 展开动画结束后才允许加载详情数据。
     const [switchingItemId, setSwitchingItemId] = useState<number | null>(null);
     const requestBody = useLogRequestBody(log.id, log.started_at, detailReady && leftTab === 'request');
     const responseBody = useLogResponseBody(log.id, log.started_at, detailReady && log.status === 'success');
     const { data: groups = [] } = useGroupList(detailReady, detailReady);
     const { data: modelChannels = [] } = useModelChannelList(detailReady);
+    const { sessions } = useSessions();
     const updateActiveItem = useUpdateGroupActiveItem();
     const stopRound = useStopRound();
+    const bindSession = useBindSession();
     const channelNameByKey = useMemo(() => buildChannelNameByModelKey(modelChannels), [modelChannels]);
     const actualModel = log.target_model || log.model;
     const { Icon, className: iconClassName, color: brandColor } = getModelIcon(actualModel);
     const errorText = log.error ?? '';
+    const cancelReason = log.cancel_reason ?? '';
     const requestFailed = log.status === 'failed' || log.status === 'canceled';
     const responseCommitted = log.status === 'committed';
+    const rounds = log.rounds ?? [];
+    const orderedRounds = useMemo(() => [...(log.rounds ?? [])].sort((a, b) => b.round - a.round), [log.rounds]); // 最新一轮排在最前。
     const showRounds = log.status === 'running' || (requestFailed && rounds.length > 0);
     const activeGroup = groups.find((group) => group.name === log.model);
-    const isWaitingForSelection = log.status === 'running' && !log.sending && activeGroup?.mode === 'manual' && activeGroup.active_item_id === 0; // isWaitingForSelection 表示手动模式请求正等待选择渠道。
+    const isSessionMode = activeGroup?.mode === 'session'; // session 模式下按会话绑定渠道, 不再切换分组当前项。
+    const isManualMode = activeGroup?.mode === 'manual';
+    const session = log.session_id ? sessions.find((item) => item.id === log.session_id) : undefined;
+    const sessionMemberKey = session && session.channel_id !== 0
+        ? modelChannelKey(session.channel_id, session.model_name)
+        : '';
+    // isWaitingForSelection 表示请求正等待管理员选择渠道。
+    const isWaitingForSelection = log.status === 'running' && !log.sending && (
+        (isManualMode && activeGroup?.active_item_id === 0)
+        || (isSessionMode && session?.status === 'pending')
+    );
+    const canSelectItem = isManualMode || isSessionMode;
 
     // 让弹窗先完成展开动画, 避免详情请求及其状态更新占用动画起步帧。
     useEffect(() => {
         const timer = window.setTimeout(() => setDetailReady(true), 600);
         return () => window.clearTimeout(timer);
     }, []);
-
-    // 按轮次记录本次打开期间观察到的上游请求状态, 最新一轮排在最前。
-    useEffect(() => {
-        if (log.round === 0) return;
-        setRounds((current) => {
-            if (!log.sending && current.every((item) => item.round !== log.round)) return current;
-            return [
-                { round: log.round, channel: log.target_channel, error: errorText, sending: log.sending },
-                ...current.filter((item) => item.round !== log.round),
-            ];
-        });
-    }, [errorText, log.round, log.sending, log.target_channel]);
 
     return (
         <MorphingDialogContent className="relative w-[calc(100vw-2rem)] md:w-[80vw] bg-card text-card-foreground px-6 py-4 rounded-3xl h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
@@ -239,7 +235,10 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                 <div className="divide-y divide-border">
                                     {activeGroup.items.map((item) => {
                                         const { Icon: ItemIcon, className: itemIconClassName } = getModelIcon(item.model_name);
-                                        const itemActive = item.id === activeGroup.active_item_id;
+                                        const itemKey = modelChannelKey(item.channel_id, item.model_name);
+                                        const itemActive = isSessionMode
+                                            ? itemKey === sessionMemberKey
+                                            : item.id === activeGroup.active_item_id;
                                         const itemSwitching = item.id === switchingItemId;
                                         const itemCurrent = switchingItemId !== null
                                             ? itemSwitching
@@ -248,19 +247,27 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                                 : itemActive;
                                         return (
                                             <button
-                                                key={item.id ?? modelChannelKey(item.channel_id, item.model_name)}
+                                                key={item.id ?? itemKey}
                                                 type="button"
                                                 aria-pressed={itemCurrent}
-                                                disabled={item.id === undefined || activeGroup.mode === 'failover' || switchingItemId !== null || stopRound.isPending}
+                                                disabled={item.id === undefined || !canSelectItem || switchingItemId !== null || stopRound.isPending || bindSession.isPending}
                                                 onClick={async () => {
-                                                    if (!activeGroup.id || item.id === undefined || activeGroup.mode === 'failover') return;
+                                                    if (item.id === undefined || !canSelectItem) return;
                                                     setSwitchingItemId(item.id);
                                                     try {
-                                                        await updateActiveItem.mutateAsync({ groupId: activeGroup.id, itemId: itemActive ? 0 : item.id });
-                                                        if (log.sending) {
-                                                            await stopRound.mutateAsync({ requestId: log.id, round: log.round });
+                                                        if (isSessionMode) {
+                                                            // session 模式下后端会自动中止当前轮次, 因此不需要额外调用停止。
+                                                            if (!log.session_id) throw new Error(t('sessionUnavailable'));
+                                                            await bindSession.mutateAsync({ sessionId: log.session_id, channelId: item.channel_id, modelName: item.model_name });
+                                                            toast.success(t('channelChanged'));
+                                                        } else {
+                                                            if (!activeGroup.id) return;
+                                                            await updateActiveItem.mutateAsync({ groupId: activeGroup.id, itemId: itemActive ? 0 : item.id });
+                                                            if (log.sending) {
+                                                                await stopRound.mutateAsync({ requestId: log.id, round: log.round });
+                                                            }
+                                                            toast.success(itemActive ? t('channelCleared') : t('channelChanged'));
                                                         }
-                                                        toast.success(itemActive ? t('channelCleared') : t('channelChanged'));
                                                     } catch (cause) {
                                                         toast.error(t('channelChangeFailed'), { description: cause instanceof Error ? cause.message : undefined });
                                                     } finally {
@@ -272,7 +279,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                                 <ItemIcon aria-hidden="true" className={itemIconClassName} width={20} height={20} />
                                                 <span className="min-w-0 flex-1">
                                                     <span className="block truncate font-semibold text-foreground">
-                                                        {channelNameByKey.get(modelChannelKey(item.channel_id, item.model_name)) ?? `#${item.channel_id}`}
+                                                        {channelNameByKey.get(itemKey) ?? `#${item.channel_id}`}
                                                     </span>
                                                     <span className="block truncate text-[11px] text-muted-foreground">{item.model_name}</span>
                                                 </span>
@@ -291,7 +298,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                             <span className="text-sm font-medium text-card-foreground">
                                 {isWaitingForSelection ? t('waitingChannelSelection') : showRounds ? t('retryDetails') : requestFailed ? t('errorInfo') : t('responseContent')}
                             </span>
-                            {log.status === 'running' && log.sending && activeGroup?.mode === 'manual' ? (
+                            {log.status === 'running' && log.sending && isManualMode ? (
                                 <button
                                     type="button"
                                     disabled={stopRound.isPending}
@@ -328,29 +335,38 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                             ) : showRounds ? (
                                 rounds.length ? (
                                     <div className="divide-y divide-border">
-                                        {rounds.map((round) => (
-                                            <div key={round.round} className="flex flex-col gap-1.5 px-3 py-2.5 text-xs">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-muted-foreground">{t('retryIndex', { index: round.round })}</span>
-                                                    <span className="font-semibold text-foreground">{round.channel || '-'}</span>
-                                                    {round.sending ? (
-                                                        <Loader2 className="ml-auto size-3.5 animate-spin text-muted-foreground" />
-                                                    ) : round.error ? (
-                                                        <CopyIconButton
-                                                            text={round.error}
-                                                            className="ml-auto p-1 rounded-md text-destructive/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                                                            copyIconClassName="size-3.5"
-                                                            checkIconClassName="size-3.5"
-                                                        />
-                                                    ) : null}
-                                                </div>
-                                                {round.error && (
-                                                    <div className="text-[11px] leading-relaxed text-destructive/90 whitespace-pre-wrap wrap-break-word">
-                                                        {round.error}
+                                        {orderedRounds.map((round) => {
+                                            const roundSending = log.sending && round.round === log.round;
+                                            return (
+                                                <div key={round.round} className="flex flex-col gap-1.5 px-3 py-2.5 text-xs">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="shrink-0 text-muted-foreground">{t('retryIndex', { index: round.round })}</span>
+                                                        <span className="truncate font-semibold text-foreground" title={round.channel}>{round.channel || '-'}</span>
+                                                        <span className="truncate text-[11px] text-muted-foreground" title={round.model}>{round.model}</span>
+                                                        {roundSending ? (
+                                                            <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                                                        ) : (
+                                                            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                                                                <span className="tabular-nums text-muted-foreground">{formatMilliseconds(round.duration_ms)}</span>
+                                                                {round.error && (
+                                                                    <CopyIconButton
+                                                                        text={round.error}
+                                                                        className="p-1 rounded-md text-destructive/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                                                                        copyIconClassName="size-3.5"
+                                                                        checkIconClassName="size-3.5"
+                                                                    />
+                                                                )}
+                                                            </span>
+                                                        )}
                                                     </div>
-                                                )}
-                                            </div>
-                                        ))}
+                                                    {round.error && (
+                                                        <div className="text-[11px] leading-relaxed text-destructive/90 whitespace-pre-wrap wrap-break-word">
+                                                            {round.error}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 ) : (
                                     <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
@@ -364,7 +380,20 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                                     {t('responseStreaming')}
                                 </div>
                             ) : requestFailed ? (
-                                <JsonContent content={errorText} fallbackText={t('noResponseContent')} />
+                                <div className="flex flex-col gap-3 p-4 text-xs">
+                                    {cancelReason && (
+                                        <div className="rounded-xl border border-border bg-muted/40 p-2.5">
+                                            <p className="mb-1 font-medium text-muted-foreground">{t('cancelReason')}</p>
+                                            <p className="leading-relaxed text-foreground/80 whitespace-pre-wrap wrap-break-word">{cancelReason}</p>
+                                        </div>
+                                    )}
+                                    <div className="rounded-xl border border-destructive/20 bg-destructive/10 p-2.5">
+                                        <p className="mb-1 font-medium text-destructive/80">{t('errorInfo')}</p>
+                                        <p className="leading-relaxed text-destructive whitespace-pre-wrap wrap-break-word">
+                                            {errorText || t('noResponseContent')}
+                                        </p>
+                                    </div>
+                                </div>
                             ) : responseBody.isLoading ? (
                                 <div className="flex h-full items-center justify-center">
                                     <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -399,6 +428,7 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
     const requestRunning = log.status === 'running' || log.status === 'committed';
     const requestFailed = log.status === 'failed' || log.status === 'canceled';
     const errorText = log.error ?? '';
+    const cancelReason = log.cancel_reason ?? '';
 
     // 仅在请求进行中或弹窗打开时走秒级刷新, 避免已完成日志持续触发重渲染。
     useEffect(() => {
@@ -439,9 +469,16 @@ function LogCardBody({ log }: { log: RelayLogOverview }) {
                         <div className="grid grid-cols-12 gap-x-4 gap-y-2 text-xs tabular-nums text-muted-foreground md:grid-cols-7">
                             <LogMetrics log={log} now={now} brandColor={brandColor} variant="card" />
                         </div>
-                        {requestFailed && errorText && (
-                            <div className="p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 overflow-hidden">
-                                <p className="text-xs text-destructive line-clamp-2 whitespace-pre-line">{errorText}</p>
+                        {requestFailed && (errorText || cancelReason) && (
+                            <div className="flex flex-col gap-1.5 p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 overflow-hidden">
+                                {errorText && (
+                                    <p className="text-xs text-destructive line-clamp-2 whitespace-pre-line">{errorText}</p>
+                                )}
+                                {cancelReason && (
+                                    <p className="text-[11px] text-muted-foreground line-clamp-1">
+                                        {t('cancelReasonWith', { reason: cancelReason })}
+                                    </p>
+                                )}
                             </div>
                         )}
                     </div>

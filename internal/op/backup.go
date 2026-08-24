@@ -126,7 +126,7 @@ func DBImportIncremental(ctx context.Context, dump *model.DBDump) (*model.DBImpo
 			} else {
 				res.RowsAffected["stats_hourly"] = n
 			}
-			if n, err := createUpsertAll(tx, dump.StatsModel, []clause.Column{{Name: "id"}}); err != nil {
+			if n, err := createUpsertAll(tx, mergeStatsModel(dump.StatsModel), []clause.Column{{Name: "channel_id"}, {Name: "name"}}); err != nil {
 				return fmt.Errorf("import stats_model: %w", err)
 			} else {
 				res.RowsAffected["stats_model"] = n
@@ -183,4 +183,24 @@ func createUpsertSettings(tx *gorm.DB, rows []model.Setting) (int64, error) {
 		DoUpdates: clause.AssignmentColumns([]string{"value"}),
 	}).Create(&rows)
 	return result.RowsAffected, result.Error
+}
+
+// mergeStatsModel 按 (channel_id, name) 合并模型统计。
+// 旧版备份中同一渠道模型在每个分组里各占一行，upsert 的 UpdateAll 会让后一行覆盖前一行，因此先在内存中累加再写库。
+func mergeStatsModel(rows []model.StatsModel) []model.StatsModel {
+	if len(rows) <= 1 {
+		return rows
+	}
+	indexByKey := make(map[string]int, len(rows))
+	merged := make([]model.StatsModel, 0, len(rows))
+	for _, row := range rows {
+		key := statsModelKey(row.ChannelID, row.Name)
+		if i, ok := indexByKey[key]; ok {
+			merged[i].StatsMetrics.Add(row.StatsMetrics)
+			continue
+		}
+		indexByKey[key] = len(merged)
+		merged = append(merged, row)
+	}
+	return merged
 }

@@ -310,6 +310,17 @@
             },
             "clearSuccess": "Logs cleared",
             "clearFailed": "Failed to clear logs"
+        },
+        "notification": {
+            "title": "Notifications",
+            "pending": {
+                "label": "Session routing alerts",
+                "hint": "Send a browser notification when a new session is waiting for a channel; falls back to an in-page toast when notifications are unavailable."
+            },
+            "granted": "Browser notifications allowed",
+            "denied": "Browser notifications blocked, in-page toasts will be used",
+            "default": "Browser notification permission not requested yet",
+            "unsupported": "This browser does not support notifications"
         }
     },
     "group": {
@@ -343,7 +354,7 @@
         "form": {
             "name": "Group Name",
             "mode": "Routing Mode",
-            "modeHint": "Manual fixes one member; failover follows member order and switches on failures",
+            "modeHint": "Manual fixes one member; failover follows member order and switches on failures; by session picks a channel manually for every new session",
             "manual": "Manual",
             "failover": "Failover",
             "members": "Members",
@@ -363,7 +374,9 @@
             "items": "Member Order",
             "addItem": "Add Model",
             "autoAdd": "Auto Add",
-            "clear": "Clear"
+            "clear": "Clear",
+            "session": "By Session",
+            "sessionHint": "Every new session waits until you pick a channel and model on the log page"
         }
     },
     "model": {
@@ -429,7 +442,47 @@
             "stopFailed": "Failed to stop current round",
             "waitingChannelSelection": "Waiting for channel selection",
             "waitingResponse": "Waiting for upstream response",
-            "responseStreaming": "Upstream responded; streaming is in progress"
+            "responseStreaming": "Upstream responded; streaming is in progress",
+            "cancelReason": "Cancel Reason",
+            "cancelReasonWith": "Canceled: {reason}",
+            "sessionUnavailable": "This request is not bound to a session"
+        },
+        "session": {
+            "ungrouped": "Ungrouped requests",
+            "status": {
+                "pending": "Waiting",
+                "bound": "Bound",
+                "error": "Failed"
+            },
+            "client": {
+                "claudeCode": "Claude Code",
+                "codex": "Codex",
+                "openaiSdk": "OpenAI SDK",
+                "unknown": "Unknown client"
+            },
+            "searchPlaceholder": "Search channel or model",
+            "noCandidates": "No matching channel",
+            "favorite": "Common",
+            "unboundChannel": "Pick a channel",
+            "unboundModel": "Pick a model",
+            "unbind": "Unbind",
+            "unbindSuccess": "Session unbound",
+            "unbindFailed": "Failed to unbind session",
+            "bindSuccess": "Session channel updated",
+            "bindFailed": "Failed to update session channel",
+            "waitingSelection": "Waiting for channel selection",
+            "countdown": "{seconds}s left",
+            "timedOut": "Timed out, picking now still resumes the retry",
+            "pendingCount": "{count} requests waiting",
+            "errorRetryHint": "Pick another channel to retry this session",
+            "requests": "{count} requests",
+            "expand": "Show {count} requests",
+            "collapse": "Hide requests",
+            "noRequests": "No requests kept for this session"
+        },
+        "notification": {
+            "title": "A new session needs a channel",
+            "action": "View"
         }
     },
     "channel": {
@@ -512,7 +565,10 @@
             "typeVolcengine": "Volcengine",
             "autoSync": "Auto Sync",
             "matchRegex": "Match Regex",
-            "matchRegexPlaceholder": "Optional: regex pattern to match request model names"
+            "matchRegexPlaceholder": "Optional: regex pattern to match request model names",
+            "headerBlocklist": "Header Blocklist",
+            "headerBlocklistPlaceholder": "User-Agent, anthropic-beta",
+            "headerBlocklistHint": "Comma separated; these request headers are not forwarded upstream"
         }
     }
 }

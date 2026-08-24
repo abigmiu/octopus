@@ -310,6 +310,17 @@
             },
             "clearSuccess": "日志已清空",
             "clearFailed": "清空失败"
+        },
+        "notification": {
+            "title": "通知",
+            "pending": {
+                "label": "会话选路提醒",
+                "hint": "新会话等待选择渠道时通过浏览器通知提醒；通知不可用时降级为页面内提示。"
+            },
+            "granted": "浏览器通知已允许",
+            "denied": "浏览器通知已被拒绝，将使用页面内提示",
+            "default": "尚未申请浏览器通知权限",
+            "unsupported": "当前浏览器不支持通知"
         }
     },
     "group": {
@@ -343,7 +354,7 @@
         "form": {
             "name": "分组名称",
             "mode": "路由模式",
-            "modeHint": "手动固定选中成员；故障转移按成员顺序并在失败时切换",
+            "modeHint": "手动固定选中成员；故障转移按成员顺序并在失败时切换；按会话手动为每个新会话单独选择渠道",
             "manual": "手动",
             "failover": "故障转移",
             "members": "成员",
@@ -363,7 +374,9 @@
             "items": "成员顺序",
             "addItem": "添加模型",
             "autoAdd": "自动添加",
-            "clear": "清空"
+            "clear": "清空",
+            "session": "按会话手动",
+            "sessionHint": "每个新会话都需要在日志页手动选择渠道和模型后才会继续"
         }
     },
     "model": {
@@ -429,7 +442,47 @@
             "stopFailed": "停止当前轮次失败",
             "waitingChannelSelection": "正在等待选择渠道",
             "waitingResponse": "正在等待上游响应",
-            "responseStreaming": "上游已响应，流式传输正在进行"
+            "responseStreaming": "上游已响应，流式传输正在进行",
+            "cancelReason": "取消原因",
+            "cancelReasonWith": "已取消：{reason}",
+            "sessionUnavailable": "该请求没有关联会话"
+        },
+        "session": {
+            "ungrouped": "未分组请求",
+            "status": {
+                "pending": "等待选择",
+                "bound": "已绑定",
+                "error": "失败"
+            },
+            "client": {
+                "claudeCode": "Claude Code",
+                "codex": "Codex",
+                "openaiSdk": "OpenAI SDK",
+                "unknown": "未知客户端"
+            },
+            "searchPlaceholder": "搜索渠道或模型",
+            "noCandidates": "没有匹配的渠道",
+            "favorite": "常用",
+            "unboundChannel": "选择渠道",
+            "unboundModel": "选择模型",
+            "unbind": "解除绑定",
+            "unbindSuccess": "已解除会话绑定",
+            "unbindFailed": "解除会话绑定失败",
+            "bindSuccess": "会话渠道已更新",
+            "bindFailed": "会话渠道更新失败",
+            "waitingSelection": "等待选择渠道",
+            "countdown": "剩余 {seconds} 秒",
+            "timedOut": "已超时，现在选择仍会立即生效",
+            "pendingCount": "{count} 个请求等待中",
+            "errorRetryHint": "换一个渠道即可重试该会话",
+            "requests": "{count} 个请求",
+            "expand": "展开 {count} 个请求",
+            "collapse": "收起请求",
+            "noRequests": "该会话没有保留请求"
+        },
+        "notification": {
+            "title": "有新会话需要选择渠道",
+            "action": "查看"
         }
     },
     "channel": {
@@ -512,7 +565,10 @@
             "typeVolcengine": "火山引擎",
             "autoSync": "自动同步",
             "matchRegex": "匹配正则",
-            "matchRegexPlaceholder": "可选：用于匹配请求模型名称的正则表达式"
+            "matchRegexPlaceholder": "可选：用于匹配请求模型名称的正则表达式",
+            "headerBlocklist": "屏蔽 Header",
+            "headerBlocklistPlaceholder": "User-Agent, anthropic-beta",
+            "headerBlocklistHint": "逗号分隔，这些请求头不会转发给上游"
         }
     }
 }

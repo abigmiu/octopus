@@ -26,10 +26,10 @@ type StatsDaily struct {
 	StatsMetrics
 }
 
+// StatsModel 按 渠道×模型 聚合统计，size:191 用于满足 MySQL 复合主键索引长度限制。
 type StatsModel struct {
-	ID        int    `json:"id" gorm:"primaryKey"`
-	Name      string `json:"name" gorm:"not null"`
-	ChannelID int    `json:"channel_id" gorm:"not null"`
+	ChannelID int    `json:"channel_id" gorm:"primaryKey;autoIncrement:false"`
+	Name      string `json:"name" gorm:"primaryKey;size:191"`
 	StatsMetrics
 }
 

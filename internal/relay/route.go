@@ -22,13 +22,14 @@ type RouteState struct {
 const routeStreamBuffer = 16 // 单个路由流连接的非阻塞消息缓冲容量。
 
 var (
-	routeMu      sync.Mutex                      // routeMu 保护全部分组路由状态。
+	routeMu      sync.Mutex                           // routeMu 保护全部分组路由状态。
 	routes       = make(map[int]*RouteState)          // routes 按分组 ID 保存路由状态。
 	routeStreams = make(map[chan RouteState]struct{}) // 全部路由 SSE 连接。
 )
 
 // pickGroupItem 按分组模式选择本轮目标成员, 没有可用成员时返回零值; group.Items 已按 Priority 升序排列。
 // 渠道是否可用不在此判断: 渠道禁用或缺少密钥由调用方发现并作为一轮失败上报, 该成员随即进入冷却而在后续轮次被跳过。
+// 会话模式不经由此函数选目标, 其目标由会话绑定直接给出。
 func pickGroupItem(group model.Group) model.GroupItem {
 	if group.Mode == model.GroupModeManual {
 		for _, item := range group.Items {
@@ -83,7 +84,8 @@ func pickGroupItem(group model.Group) model.GroupItem {
 
 // recordRouteSuccess 上报一轮成功: 结束该成员的冷却与探测占用, 并在故障切换后按配置开始亲和。
 func recordRouteSuccess(group model.Group, itemID int) {
-	if group.Mode == model.GroupModeManual {
+	// 手动与会话模式的目标由人工指定, 不参与冷却, 探测和亲和。
+	if group.Mode != model.GroupModeFailover {
 		return
 	}
 
@@ -123,7 +125,8 @@ func recordRouteSuccess(group model.Group, itemID int) {
 // recordRouteFailure 上报一轮失败: 达到配置的总尝试次数后将该成员打入冷却并让出当前路由, 返回是否已冷却。
 // failures 为该成员在本请求内包含首次请求的连续失败次数, 由调用方累计。
 func recordRouteFailure(group model.Group, itemID, failures int) bool {
-	if group.Mode == model.GroupModeManual {
+	// 手动与会话模式的目标由人工指定, 不参与冷却, 探测和亲和。
+	if group.Mode != model.GroupModeFailover {
 		return false
 	}
 

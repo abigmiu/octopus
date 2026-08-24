@@ -16,6 +16,16 @@ export interface RelayUsage {
     } | null;
 }
 
+// RelayRound 是一轮上游尝试的完整记录，请求结束后依然由后端保留。
+export interface RelayRound {
+    round: number;
+    channel: string;
+    model: string;
+    started_at: string;
+    duration_ms: number;
+    error?: string;
+}
+
 // RelayLogOverview 是请求状态流发送的完整进程内请求状态。
 export interface RelayLogOverview {
     id: number;
@@ -30,6 +40,10 @@ export interface RelayLogOverview {
     target_model: string;
     sending: boolean;
     error?: string;
+    session_id: string;
+    session_label: string;
+    cancel_reason?: string; // cancel_reason 与 error 分开，error 保留最后一次真实失败原因。
+    rounds?: RelayRound[];
 }
 
 // useClearLogs 清空已完成的内存日志。

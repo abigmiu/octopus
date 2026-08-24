@@ -310,6 +310,17 @@
             },
             "clearSuccess": "日誌已清空",
             "clearFailed": "清空失敗"
+        },
+        "notification": {
+            "title": "通知",
+            "pending": {
+                "label": "工作階段選路提醒",
+                "hint": "新的工作階段等待選擇供應源時透過瀏覽器通知提醒；通知不可用時降級為頁面內提示。"
+            },
+            "granted": "瀏覽器通知已允許",
+            "denied": "瀏覽器通知已被拒絕，將使用頁面內提示",
+            "default": "尚未申請瀏覽器通知權限",
+            "unsupported": "目前瀏覽器不支援通知"
         }
     },
     "group": {
@@ -343,7 +354,7 @@
         "form": {
             "name": "分組名稱",
             "mode": "路由模式",
-            "modeHint": "手動固定選中成員；故障轉移按成員順序並在失敗時切換",
+            "modeHint": "手動固定選中成員；故障轉移按成員順序並在失敗時切換；依工作階段手動為每個新工作階段單獨選擇供應源",
             "manual": "手動",
             "failover": "故障轉移",
             "members": "成員",
@@ -363,7 +374,9 @@
             "items": "成員順序",
             "addItem": "新增模型",
             "autoAdd": "自動新增",
-            "clear": "清空"
+            "clear": "清空",
+            "session": "依工作階段手動",
+            "sessionHint": "每個新工作階段都需要在日誌頁手動選擇供應源和模型後才會繼續"
         }
     },
     "model": {
@@ -429,7 +442,47 @@
             "stopFailed": "停止目前輪次失敗",
             "waitingChannelSelection": "正在等待選擇供應源",
             "waitingResponse": "正在等待上游回應",
-            "responseStreaming": "上游已回應，串流傳輸正在進行"
+            "responseStreaming": "上游已回應，串流傳輸正在進行",
+            "cancelReason": "取消原因",
+            "cancelReasonWith": "已取消：{reason}",
+            "sessionUnavailable": "該請求沒有關聯工作階段"
+        },
+        "session": {
+            "ungrouped": "未分組請求",
+            "status": {
+                "pending": "等待選擇",
+                "bound": "已綁定",
+                "error": "失敗"
+            },
+            "client": {
+                "claudeCode": "Claude Code",
+                "codex": "Codex",
+                "openaiSdk": "OpenAI SDK",
+                "unknown": "未知用戶端"
+            },
+            "searchPlaceholder": "搜尋供應源或模型",
+            "noCandidates": "沒有符合的供應源",
+            "favorite": "常用",
+            "unboundChannel": "選擇供應源",
+            "unboundModel": "選擇模型",
+            "unbind": "解除綁定",
+            "unbindSuccess": "已解除工作階段綁定",
+            "unbindFailed": "解除工作階段綁定失敗",
+            "bindSuccess": "工作階段供應源已更新",
+            "bindFailed": "工作階段供應源更新失敗",
+            "waitingSelection": "等待選擇供應源",
+            "countdown": "剩餘 {seconds} 秒",
+            "timedOut": "已逾時，現在選擇仍會立即生效",
+            "pendingCount": "{count} 個請求等待中",
+            "errorRetryHint": "換一個供應源即可重試該工作階段",
+            "requests": "{count} 個請求",
+            "expand": "展開 {count} 個請求",
+            "collapse": "收起請求",
+            "noRequests": "該工作階段沒有保留請求"
+        },
+        "notification": {
+            "title": "有新的工作階段需要選擇供應源",
+            "action": "查看"
         }
     },
     "channel": {
@@ -512,7 +565,10 @@
             "typeVolcengine": "火山引擎",
             "autoSync": "自動同步",
             "matchRegex": "匹配正規",
-            "matchRegexPlaceholder": "可選：用於匹配請求模型名稱的正規表示式"
+            "matchRegexPlaceholder": "可選：用於匹配請求模型名稱的正規表示式",
+            "headerBlocklist": "封鎖 Header",
+            "headerBlocklistPlaceholder": "User-Agent, anthropic-beta",
+            "headerBlocklistHint": "以逗號分隔，這些請求標頭不會轉發給上游"
         }
     }
 }

@@ -35,6 +35,7 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
         base_url: channel.base_url,
         key: channel.key,
         custom_header: channel.custom_header ?? [],
+        header_blocklist: channel.header_blocklist ?? '',
         channel_proxy: channel.channel_proxy ?? '',
         param_override: channel.param_override ?? '',
         model: channel.model,
@@ -71,8 +72,14 @@ export function CardContent({ channel, stats }: { channel: Channel; stats: Stats
                 .filter((h) => h.header_key && h.header_value !== '');
         }
 
-        const nextChannelProxy = formData.channel_proxy.trim();
-        const curChannelProxy = channel.channel_proxy ?? '';
+        const nextHeaderBlocklist = formData.header_blocklist.trim();
+        const curHeaderBlocklist = channel.header_blocklist ?? '';
+        if (nextHeaderBlocklist !== curHeaderBlocklist) {
+            // Empty string means "clear" for patch semantics; backend forwards every header again.
+            req.header_blocklist = nextHeaderBlocklist;
+        }
+
+        const nextChannelProxy = formData.channel_proxy.trim();        const curChannelProxy = channel.channel_proxy ?? '';
         if (nextChannelProxy !== curChannelProxy) {
             // Empty string means "clear" for patch semantics; backend maps it to NULL.
             req.channel_proxy = nextChannelProxy;

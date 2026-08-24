@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from './client';
 import { groupListQueryOptions } from './queries';
 
-// GroupMode 表示分组的手动或故障转移路由模式。
-export type GroupMode = 'manual' | 'failover';
+// GroupMode 表示分组的手动、故障转移或按会话手动路由模式。
+export type GroupMode = 'manual' | 'failover' | 'session';
 
 // GroupRelayConfig 保存分组 Relay 配置。
 export interface GroupRelayConfig {

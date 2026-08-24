@@ -75,6 +75,10 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		selectFields = append(selectFields, "custom_header")
 		updates.CustomHeader = *req.CustomHeader
 	}
+	if req.HeaderBlocklist != nil {
+		selectFields = append(selectFields, "header_blocklist")
+		updates.HeaderBlocklist = req.HeaderBlocklist
+	}
 	if req.ChannelProxy != nil {
 		selectFields = append(selectFields, "channel_proxy")
 		updates.ChannelProxy = req.ChannelProxy
@@ -179,6 +183,10 @@ func ChannelDel(id int, ctx context.Context) error {
 		if err := tx.Where("channel_id = ?", id).Delete(&model.StatsChannel{}).Error; err != nil {
 			return fmt.Errorf("failed to delete channel stats: %w", err)
 		}
+		// 模型统计按 渠道×模型 归属，随渠道一起删除。
+		if err := tx.Where("channel_id = ?", id).Delete(&model.StatsModel{}).Error; err != nil {
+			return fmt.Errorf("failed to delete model stats: %w", err)
+		}
 
 		// 删除渠道
 		if err := tx.Delete(&model.Channel{}, id).Error; err != nil {
@@ -197,6 +205,7 @@ func ChannelDel(id int, ctx context.Context) error {
 	statsChannelCache.Del(id)
 	delete(statsChannelCacheNeedUpdate, id)
 	statsChannelCacheNeedUpdateLock.Unlock()
+	statsModelCacheDelByChannel(id)
 	return nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -64,7 +65,85 @@ func buildPassthroughRequest(format llm.APIFormat, raw *httpclient.Request, chan
 	return request, nil
 }
 
-// inspectStreamEvent 判断一个客户端协议流事件是否结束了整个响应流, 并识别以事件形式下发的上游错误。
+// 各客户端协议专属的请求头; 跨协议转发时这些头不属于目标上游, 保留会被严格的上游拒绝或识别为异常客户端。
+var protocolHeaders = map[llm.APIFormat][]string{
+	llm.APIFormatAnthropicMessage: {
+		"Anthropic-Version",
+		"Anthropic-Beta",
+		"Anthropic-Dangerous-Direct-Browser-Access",
+		"X-Api-Version",
+	},
+	llm.APIFormatOpenAIChatCompletion: {
+		"Openai-Organization",
+		"Openai-Project",
+		"Openai-Beta",
+		"Chatgpt-Account-Id",
+	},
+	llm.APIFormatOpenAIResponse: {
+		"Openai-Organization",
+		"Openai-Project",
+		"Openai-Beta",
+		"Chatgpt-Account-Id",
+		"Originator",
+		"Session-Id",
+		"Session_id",
+	},
+}
+
+// 各客户端协议专属的请求头前缀, 用于覆盖同族的整批头。
+var protocolHeaderPrefixes = map[llm.APIFormat][]string{
+	llm.APIFormatAnthropicMessage:     {"Anthropic-"},
+	llm.APIFormatOpenAIChatCompletion: {"Openai-", "X-Stainless-"},
+	llm.APIFormatOpenAIResponse:       {"Openai-", "X-Stainless-"},
+}
+
+// 不随任何协议归属但会暴露客户端身份的请求头; 跨协议时一并剔除。
+var clientIdentityHeaders = []string{"User-Agent", "X-App", "X-Client-Request-Id", "X-Claude-Code-Session-Id", "X-Claude-Code-Agent-Id"}
+
+// stripForeignProtocolHeaders 剔除不属于目标协议的客户端专属请求头。
+// 同协议透传不调用此函数, 客户端请求头原样转发, 因此依赖客户端身份校验的上游不受影响;
+// 跨协议时客户端与上游本就不是同一种协议, 继续携带来源协议的头只会让上游报错或判定异常。
+func stripForeignProtocolHeaders(target llm.APIFormat, headers http.Header) {
+	if headers == nil {
+		return
+	}
+	// 目标协议自己的头需要保留, 先收集成集合再逐一比对。
+	keep := make(map[string]struct{}, len(protocolHeaders[target]))
+	for _, name := range protocolHeaders[target] {
+		keep[http.CanonicalHeaderKey(name)] = struct{}{}
+	}
+	keepPrefixes := protocolHeaderPrefixes[target]
+
+	for format, names := range protocolHeaders {
+		if format == target {
+			continue
+		}
+		for _, name := range names {
+			if _, retained := keep[http.CanonicalHeaderKey(name)]; !retained {
+				headers.Del(name)
+			}
+		}
+	}
+	for format, prefixes := range protocolHeaderPrefixes {
+		if format == target {
+			continue
+		}
+		for _, prefix := range prefixes {
+			if slices.Contains(keepPrefixes, prefix) {
+				continue
+			}
+			for key := range headers {
+				if strings.HasPrefix(key, prefix) {
+					headers.Del(key)
+				}
+			}
+		}
+	}
+	for _, name := range clientIdentityHeaders {
+		headers.Del(name)
+	}
+}
+
 // 返回 true 表示流已结束; 返回的 error 非空表示该事件本身即失败, 本轮不可提交。
 func inspectStreamEvent(format llm.APIFormat, event *httpclient.StreamEvent) (bool, error) {
 	if event == nil || len(event.Data) == 0 {

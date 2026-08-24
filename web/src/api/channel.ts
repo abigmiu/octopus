@@ -34,6 +34,7 @@ export type Channel = {
     proxy: boolean;
     auto_sync: boolean;
     custom_header: CustomHeader[];
+    header_blocklist?: string; // 逗号分隔的请求头名单，这些头不会转发给上游。
     param_override?: string | null;
     channel_proxy?: string | null;
     match_regex?: string | null;
@@ -65,6 +66,7 @@ type CreateChannelRequest = {
     proxy?: boolean;
     auto_sync?: boolean;
     custom_header?: CustomHeader[];
+    header_blocklist?: string;
     channel_proxy?: string | null;
     param_override?: string | null;
     match_regex?: string | null;
@@ -85,6 +87,7 @@ export type UpdateChannelRequest = {
     proxy?: boolean;
     auto_sync?: boolean;
     custom_header?: CustomHeader[];
+    header_blocklist?: string;
     channel_proxy?: string | null;
     param_override?: string | null;
     match_regex?: string | null;

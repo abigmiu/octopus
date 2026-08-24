@@ -149,9 +149,6 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 					Update("active_item_id", 0).Error; err != nil {
 					return fmt.Errorf("failed to clear active item: %w", err)
 				}
-				if err := tx.Where("id IN ?", deletedItemIDs).Delete(&model.StatsModel{}).Error; err != nil {
-					return fmt.Errorf("failed to delete model stats: %w", err)
-				}
 				if err := tx.Where("id IN ?", deletedItemIDs).Delete(&model.GroupItem{}).Error; err != nil {
 					return fmt.Errorf("failed to delete items: %w", err)
 				}
@@ -193,14 +190,6 @@ func GroupUpdate(req *model.GroupUpdateRequest, ctx context.Context) (*model.Gro
 	}); err != nil {
 		return nil, err
 	}
-	if len(deletedItemIDs) > 0 {
-		statsModelCacheNeedUpdateLock.Lock()
-		for _, itemID := range deletedItemIDs {
-			statsModelCache.Del(itemID)
-			delete(statsModelCacheNeedUpdate, itemID)
-		}
-		statsModelCacheNeedUpdateLock.Unlock()
-	}
 
 	groupCache.Set(group.ID, group)
 	groupNameIndex.Set(group.Name, group.ID)
@@ -237,25 +226,16 @@ func GroupActiveItemUpdate(groupID int, req *model.GroupActiveItemUpdateRequest,
 	return &group, nil
 }
 
-// GroupDel 删除分组、分组成员及其模型统计。
+// GroupDel 删除分组及其分组成员。
 func GroupDel(id int, ctx context.Context) error {
 	group, ok := groupCache.Get(id)
 	if !ok {
 		return fmt.Errorf("group not found")
 	}
 
-	var itemIDs []int
 	if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.GroupItem{}).Where("group_id = ?", id).Pluck("id", &itemIDs).Error; err != nil {
-			return fmt.Errorf("failed to find group items: %w", err)
-		}
-		if len(itemIDs) > 0 {
-			if err := tx.Where("id IN ?", itemIDs).Delete(&model.StatsModel{}).Error; err != nil {
-				return fmt.Errorf("failed to delete model stats: %w", err)
-			}
-			if err := tx.Where("id IN ?", itemIDs).Delete(&model.GroupItem{}).Error; err != nil {
-				return fmt.Errorf("failed to delete group items: %w", err)
-			}
+		if err := tx.Where("group_id = ?", id).Delete(&model.GroupItem{}).Error; err != nil {
+			return fmt.Errorf("failed to delete group items: %w", err)
 		}
 
 		if err := tx.Delete(&model.Group{}, id).Error; err != nil {
@@ -268,14 +248,6 @@ func GroupDel(id int, ctx context.Context) error {
 
 	groupCache.Del(id)
 	groupNameIndex.Del(group.Name)
-	if len(itemIDs) > 0 {
-		statsModelCacheNeedUpdateLock.Lock()
-		for _, itemID := range itemIDs {
-			statsModelCache.Del(itemID)
-			delete(statsModelCacheNeedUpdate, itemID)
-		}
-		statsModelCacheNeedUpdateLock.Unlock()
-	}
 	return nil
 }
 
@@ -305,7 +277,7 @@ func normalizeAndValidateGroupItems(items []model.GroupItem) error {
 	return nil
 }
 
-// groupItemCleanupByChannel 在当前事务中删除指定渠道不属于最终模型集合的分组项及其统计；modelNames 为空时删除全部分组项。
+// groupItemCleanupByChannel 在当前事务中删除指定渠道不属于最终模型集合的分组项；modelNames 为空时删除全部分组项。
 func groupItemCleanupByChannel(tx *gorm.DB, channelID int, modelNames []string) ([]int, []int, error) {
 	var items []model.GroupItem
 	query := tx.Select("id", "group_id").Where("channel_id = ?", channelID)
@@ -335,27 +307,17 @@ func groupItemCleanupByChannel(tx *gorm.DB, channelID int, modelNames []string) 
 		Update("active_item_id", 0).Error; err != nil {
 		return nil, nil, fmt.Errorf("failed to clear active items: %w", err)
 	}
-	if err := tx.Where("id IN ?", itemIDs).Delete(&model.StatsModel{}).Error; err != nil {
-		return nil, nil, fmt.Errorf("failed to delete model stats: %w", err)
-	}
 	if err := tx.Where("id IN ?", itemIDs).Delete(&model.GroupItem{}).Error; err != nil {
 		return nil, nil, fmt.Errorf("failed to delete group items: %w", err)
 	}
 	return groupIDs, itemIDs, nil
 }
 
-// groupItemCleanupCache 从缓存副本中移除已删除的分组项及其统计。
+// groupItemCleanupCache 从缓存副本中移除已删除的分组项。
 func groupItemCleanupCache(groupIDs, itemIDs []int) {
 	if len(itemIDs) == 0 {
 		return
 	}
-	statsModelCacheNeedUpdateLock.Lock()
-	for _, itemID := range itemIDs {
-		statsModelCache.Del(itemID)
-		delete(statsModelCacheNeedUpdate, itemID)
-	}
-	statsModelCacheNeedUpdateLock.Unlock()
-
 	deletedItemIDs := make(map[int]struct{}, len(itemIDs))
 	for _, itemID := range itemIDs {
 		deletedItemIDs[itemID] = struct{}{}

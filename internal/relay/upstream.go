@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"sync/atomic"
+	"time"
 
 	"github.com/bestruirui/octopus/internal/helper"
 	"github.com/bestruirui/octopus/internal/model"
@@ -31,8 +33,22 @@ type upstreamResponse struct {
 	usage  *llm.Usage                              // 上游本次可确认的用量。
 }
 
+// firstResponseGuard 在取得首个有效响应之前限制等待时间: 超时则取消上游调用, 取得响应后调用 stop 停止计时,
+// 因此流式响应的后续事件不受该时限约束。expired 报告超时是否已经发生, 用于把上下文取消归因为上游超时。
+// 返回的上下文不需要单独释放, 它随调用方给出的父上下文一起结束。
+func firstResponseGuard(ctx context.Context, timeout time.Duration) (guarded context.Context, stop func(), expired func() bool) {
+	guarded, cancel := context.WithCancel(ctx)
+	var timedOut atomic.Bool
+	timer := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		cancel()
+	})
+	return guarded, func() { timer.Stop() }, timedOut.Load
+}
+
 // sendPassthrough 以同协议透传方式请求上游, 取得的响应无需转换即可回给客户端。
-func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool) (*upstreamResponse, error) {
+// firstResponseTimeout 只约束到取得首个有效响应, 流式响应此后的事件不再计时。
+func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, firstResponseTimeout time.Duration) (*upstreamResponse, error) {
 	request, err := buildPassthroughRequest(format, raw, channel)
 	if err != nil {
 		return nil, err
@@ -41,27 +57,39 @@ func sendPassthrough(ctx context.Context, format llm.APIFormat, raw *httpclient.
 	if err != nil {
 		return nil, err
 	}
-	if streaming {
-		return sendPassthroughStream(ctx, format, request, client)
-	}
 
-	response, err := httpclient.NewHttpClientWithClient(client).Do(ctx, request)
-	if err != nil {
-		var failure *httpclient.Error
-		if errors.As(err, &failure) && len(failure.Body) > 0 {
-			return nil, fmt.Errorf("%w: %s", err, failure.Body)
+	guarded, stop, expired := firstResponseGuard(ctx, firstResponseTimeout)
+	result, err := func() (*upstreamResponse, error) {
+		if streaming {
+			return sendPassthroughStream(guarded, format, request, client)
 		}
-		return nil, err
+
+		response, err := httpclient.NewHttpClientWithClient(client).Do(guarded, request)
+		if err != nil {
+			var failure *httpclient.Error
+			if errors.As(err, &failure) && len(failure.Body) > 0 {
+				return nil, fmt.Errorf("%w: %s", err, failure.Body)
+			}
+			return nil, err
+		}
+		// 同协议下响应可原样回给客户端, 仍需解析一次以取得用量并识别以 200 下发的失败终态。
+		parsed, err := outbound.TransformResponse(guarded, response)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", err, response.Body)
+		}
+		if err := validateResponse(format, parsed); err != nil {
+			return nil, fmt.Errorf("%w: %s", err, response.Body)
+		}
+		return &upstreamResponse{body: slices.Clone(response.Body), header: response.Headers.Clone(), usage: parsed.Usage}, nil
+	}()
+	if err == nil {
+		stop()
+		return result, nil
 	}
-	// 同协议下响应可原样回给客户端, 仍需解析一次以取得用量并识别以 200 下发的失败终态。
-	parsed, err := outbound.TransformResponse(ctx, response)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, response.Body)
+	if expired() {
+		return nil, fmt.Errorf("upstream did not respond within %s: %w", firstResponseTimeout, err)
 	}
-	if err := validateResponse(format, parsed); err != nil {
-		return nil, fmt.Errorf("%w: %s", err, response.Body)
-	}
-	return &upstreamResponse{body: slices.Clone(response.Body), header: response.Headers.Clone(), usage: parsed.Usage}, nil
+	return nil, err
 }
 
 // sendPassthroughStream 发起同协议流式请求并预读首个有效事件, 首个事件通过验证才算本轮取得可提交响应。
@@ -110,15 +138,16 @@ func sendPassthroughStream(ctx context.Context, format llm.APIFormat, request *h
 
 // conversionMiddleware 保存跨协议 pipeline 单次调用需要应用和取得的状态。
 type conversionMiddleware struct {
-	pipeline.DummyMiddleware // 提供本次无需处理的其余 pipeline 中间件方法。
-	channel model.Channel // 本轮上游请求使用的渠道配置。
-	format  llm.APIFormat // 上游渠道协议, 用于校验统一响应终态。
-	rawBody []byte        // 上游非流式响应或错误的原始正文。
-	usage   *llm.Usage    // 非流式统一响应中确认的用量。
+	pipeline.DummyMiddleware               // 提供本次无需处理的其余 pipeline 中间件方法。
+	channel                  model.Channel // 本轮上游请求使用的渠道配置。
+	format                   llm.APIFormat // 上游渠道协议, 用于校验统一响应终态。
+	rawBody                  []byte        // 上游非流式响应或错误的原始正文。
+	usage                    *llm.Usage    // 非流式统一响应中确认的用量。
 }
 
-// OnOutboundRawRequest 在转换后的上游请求上应用渠道参数和自定义 Header。
+// OnOutboundRawRequest 剔除不属于渠道协议的客户端专属 Header, 再应用渠道参数和自定义 Header。
 func (m *conversionMiddleware) OnOutboundRawRequest(_ context.Context, request *httpclient.Request) (*httpclient.Request, error) {
+	stripForeignProtocolHeaders(m.format, request.Headers)
 	return request, applyChannelConfig(m.channel, request)
 }
 
@@ -146,7 +175,8 @@ func (m *conversionMiddleware) OnOutboundLlmResponse(_ context.Context, response
 }
 
 // sendConverted 经 axonhub pipeline 把客户端请求转换成渠道协议后请求上游, 响应再转换回客户端协议。
-func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool) (*upstreamResponse, error) {
+// firstResponseTimeout 只约束到取得首个有效响应, 流式响应此后的事件不再计时。
+func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Request, channel model.Channel, outbound transformer.Outbound, streaming bool, firstResponseTimeout time.Duration) (*upstreamResponse, error) {
 	var inbound transformer.Inbound
 	switch format {
 	case llm.APIFormatOpenAIResponse:
@@ -166,36 +196,50 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		inbound,
 		outbound,
 		pipeline.WithMiddlewares(middleware),
+		// pipeline 内部同样按该时限等待首个响应, 与外层守护共同确保上游卡住时能以明确原因结束本轮。
+		pipeline.WithResponseTimeouts(firstResponseTimeout, firstResponseTimeout),
 	)
-	result, err := processor.Process(ctx, raw)
-	if err != nil {
-		if len(middleware.rawBody) > 0 {
-			return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
+
+	guarded, stop, expired := firstResponseGuard(ctx, firstResponseTimeout)
+	result, err := func() (*upstreamResponse, error) {
+		result, err := processor.Process(guarded, raw)
+		if err != nil {
+			if len(middleware.rawBody) > 0 {
+				return nil, fmt.Errorf("%w: %s", err, middleware.rawBody)
+			}
+			return nil, err
+		}
+		if !streaming {
+			return &upstreamResponse{body: slices.Clone(result.Response.Body), usage: middleware.usage}, nil
+		}
+
+		events := result.EventStream
+		for events.Next() {
+			event := events.Current()
+			if event == nil || len(event.Data) == 0 {
+				continue
+			}
+			last, err := inspectStreamEvent(format, event)
+			if err != nil {
+				events.Close()
+				return nil, fmt.Errorf("%w: %s", err, event.Data)
+			}
+			return &upstreamResponse{events: events, first: event, last: last}, nil
+		}
+
+		err = events.Err()
+		events.Close()
+		if err == nil {
+			err = errors.New("upstream stream ended before first event")
 		}
 		return nil, err
-	}
-	if !streaming {
-		return &upstreamResponse{body: slices.Clone(result.Response.Body), usage: middleware.usage}, nil
-	}
-
-	events := result.EventStream
-	for events.Next() {
-		event := events.Current()
-		if event == nil || len(event.Data) == 0 {
-			continue
-		}
-		last, err := inspectStreamEvent(format, event)
-		if err != nil {
-			events.Close()
-			return nil, fmt.Errorf("%w: %s", err, event.Data)
-		}
-		return &upstreamResponse{events: events, first: event, last: last}, nil
-	}
-
-	err = events.Err()
-	events.Close()
+	}()
 	if err == nil {
-		err = errors.New("upstream stream ended before first event")
+		stop()
+		return result, nil
+	}
+	if expired() {
+		return nil, fmt.Errorf("upstream did not respond within %s: %w", firstResponseTimeout, err)
 	}
 	return nil, err
 }

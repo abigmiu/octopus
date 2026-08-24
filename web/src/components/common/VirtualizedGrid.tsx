@@ -29,6 +29,7 @@ interface VirtualizedGridProps<T> {
     getItemKey: (item: T, index: number) => string | number;
     renderItem: (item: T, index: number) => ReactNode;
     footer?: ReactNode;
+    scrollToKey?: string | number | null; // 需要定位到可视区域的条目键，值变化时滚动一次。
     onReachEnd?: () => void;
     reachEndEnabled?: boolean;
     reachEndOffset?: number;
@@ -56,6 +57,7 @@ export function VirtualizedGrid<T>({
     getItemKey,
     renderItem,
     footer = null,
+    scrollToKey = null,
     onReachEnd,
     reachEndEnabled = false,
     reachEndOffset = 1,
@@ -67,6 +69,7 @@ export function VirtualizedGrid<T>({
     );
     const containerRef = useRef<HTMLDivElement | null>(null);
     const reachEndTriggeredRef = useRef(false);
+    const scrolledKeyRef = useRef<string | number | null>(null);
 
     useEffect(() => {
         const el = containerRef.current;
@@ -129,6 +132,15 @@ export function VirtualizedGrid<T>({
     });
 
     const virtualRows = rowVirtualizer.getVirtualItems();
+
+    // 定位目标变化后把对应条目滚动到顶部，同一目标只滚动一次以免打断用户滚动。
+    useEffect(() => {
+        if (scrollToKey === null || scrolledKeyRef.current === scrollToKey) return;
+        const index = items.findIndex((item, itemIndex) => getItemKey(item, itemIndex) === scrollToKey);
+        if (index < 0) return;
+        scrolledKeyRef.current = scrollToKey;
+        rowVirtualizer.scrollToIndex(Math.floor(index / columnCount), { align: 'start' });
+    }, [columnCount, getItemKey, items, rowVirtualizer, scrollToKey]);
 
     useEffect(() => {
         if (!onReachEnd || !reachEndEnabled || itemRowCount === 0) return;

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,8 +30,8 @@ var statsChannelCache = cache.New[int, model.StatsChannel](16)
 var statsChannelCacheNeedUpdate = make(map[int]struct{})
 var statsChannelCacheNeedUpdateLock sync.Mutex
 
-var statsModelCache = cache.New[int, model.StatsModel](16)
-var statsModelCacheNeedUpdate = make(map[int]struct{})
+var statsModelCache = cache.New[string, model.StatsModel](16)
+var statsModelCacheNeedUpdate = make(map[string]struct{})
 var statsModelCacheNeedUpdateLock sync.Mutex
 
 var statsAPIKeyCache = cache.New[int, model.StatsAPIKey](16)
@@ -75,11 +77,11 @@ func StatsSaveDB(ctx context.Context) error {
 	statsChannelCacheNeedUpdateLock.Unlock()
 
 	statsModelCacheNeedUpdateLock.Lock()
-	modelIDs := make([]int, 0, len(statsModelCacheNeedUpdate))
-	for id := range statsModelCacheNeedUpdate {
-		modelIDs = append(modelIDs, id)
+	modelKeys := make([]string, 0, len(statsModelCacheNeedUpdate))
+	for key := range statsModelCacheNeedUpdate {
+		modelKeys = append(modelKeys, key)
 	}
-	statsModelCacheNeedUpdate = make(map[int]struct{})
+	statsModelCacheNeedUpdate = make(map[string]struct{})
 	statsModelCacheNeedUpdateLock.Unlock()
 
 	statsAPIKeyCacheNeedUpdateLock.Lock()
@@ -90,15 +92,15 @@ func StatsSaveDB(ctx context.Context) error {
 	statsAPIKeyCacheNeedUpdate = make(map[int]struct{})
 	statsAPIKeyCacheNeedUpdateLock.Unlock()
 
-	if err := persistStatsSnapshots(ctx, totalSnap, dailySnap, hourlyAll, channelIDs, modelIDs, apiKeyIDs); err != nil {
-		restoreStatsDirty(channelIDs, modelIDs, apiKeyIDs)
+	if err := persistStatsSnapshots(ctx, totalSnap, dailySnap, hourlyAll, channelIDs, modelKeys, apiKeyIDs); err != nil {
+		restoreStatsDirty(channelIDs, modelKeys, apiKeyIDs)
 		return err
 	}
 	return nil
 }
 
 // restoreStatsDirty 在统计持久化失败后恢复本批待写标记。
-func restoreStatsDirty(channelIDs, modelIDs, apiKeyIDs []int) {
+func restoreStatsDirty(channelIDs []int, modelKeys []string, apiKeyIDs []int) {
 	statsChannelCacheNeedUpdateLock.Lock()
 	for _, id := range channelIDs {
 		statsChannelCacheNeedUpdate[id] = struct{}{}
@@ -106,8 +108,8 @@ func restoreStatsDirty(channelIDs, modelIDs, apiKeyIDs []int) {
 	statsChannelCacheNeedUpdateLock.Unlock()
 
 	statsModelCacheNeedUpdateLock.Lock()
-	for _, id := range modelIDs {
-		statsModelCacheNeedUpdate[id] = struct{}{}
+	for _, key := range modelKeys {
+		statsModelCacheNeedUpdate[key] = struct{}{}
 	}
 	statsModelCacheNeedUpdateLock.Unlock()
 
@@ -124,7 +126,7 @@ func persistStatsSnapshots(
 	dailySnap model.StatsDaily,
 	hourlyAll [24]model.StatsHourly,
 	channelIDs []int,
-	modelIDs []int,
+	modelKeys []string,
 	apiKeyIDs []int,
 ) error {
 	dbConn := db.GetDB().WithContext(ctx)
@@ -162,8 +164,8 @@ func persistStatsSnapshots(
 		}
 	}
 
-	for _, id := range modelIDs {
-		m, ok := statsModelCache.Get(id)
+	for _, key := range modelKeys {
+		m, ok := statsModelCache.Get(key)
 		if !ok {
 			continue
 		}
@@ -206,11 +208,11 @@ func statsSaveDBWithDailyOverride(ctx context.Context, dailyOverride model.Stats
 	statsChannelCacheNeedUpdateLock.Unlock()
 
 	statsModelCacheNeedUpdateLock.Lock()
-	modelIDs := make([]int, 0, len(statsModelCacheNeedUpdate))
-	for id := range statsModelCacheNeedUpdate {
-		modelIDs = append(modelIDs, id)
+	modelKeys := make([]string, 0, len(statsModelCacheNeedUpdate))
+	for key := range statsModelCacheNeedUpdate {
+		modelKeys = append(modelKeys, key)
 	}
-	statsModelCacheNeedUpdate = make(map[int]struct{})
+	statsModelCacheNeedUpdate = make(map[string]struct{})
 	statsModelCacheNeedUpdateLock.Unlock()
 
 	statsAPIKeyCacheNeedUpdateLock.Lock()
@@ -221,8 +223,8 @@ func statsSaveDBWithDailyOverride(ctx context.Context, dailyOverride model.Stats
 	statsAPIKeyCacheNeedUpdate = make(map[int]struct{})
 	statsAPIKeyCacheNeedUpdateLock.Unlock()
 
-	if err := persistStatsSnapshots(ctx, totalSnap, dailyOverride, hourlyAll, channelIDs, modelIDs, apiKeyIDs); err != nil {
-		restoreStatsDirty(channelIDs, modelIDs, apiKeyIDs)
+	if err := persistStatsSnapshots(ctx, totalSnap, dailyOverride, hourlyAll, channelIDs, modelKeys, apiKeyIDs); err != nil {
+		restoreStatsDirty(channelIDs, modelKeys, apiKeyIDs)
 		return err
 	}
 	return nil
@@ -294,24 +296,50 @@ func StatsHourlyUpdate(metrics model.StatsMetrics) error {
 	return nil
 }
 
-// StatsModelUpdate 累加仍然存在的渠道模型统计并标记为待持久化。
-func StatsModelUpdate(stats model.StatsModel) error {
+// statsModelKey 拼接 渠道×模型 统计的缓存键。
+func statsModelKey(channelID int, name string) string {
+	return strconv.Itoa(channelID) + ":" + name
+}
+
+// statsModelCacheDelByChannel 移除指定渠道的全部模型统计缓存及其待持久化标记。
+func statsModelCacheDelByChannel(channelID int) {
+	// 前缀已含分隔符，渠道 1 的 "1:" 不会误伤渠道 11 的 "11:xxx"。
+	prefix := strconv.Itoa(channelID) + ":"
 	statsModelCacheNeedUpdateLock.Lock()
 	defer statsModelCacheNeedUpdateLock.Unlock()
-	if _, ok := channelCache.Get(stats.ChannelID); !ok {
-		return nil
-	}
-	modelCache, ok := statsModelCache.Get(stats.ID)
-	if !ok {
-		modelCache = model.StatsModel{
-			ID:        stats.ID,
-			Name:      stats.Name,
-			ChannelID: stats.ChannelID,
+	keys := make([]string, 0)
+	for key := range statsModelCache.GetAll() {
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
 		}
 	}
-	modelCache.StatsMetrics.Add(stats.StatsMetrics)
-	statsModelCache.Set(stats.ID, modelCache)
-	statsModelCacheNeedUpdate[stats.ID] = struct{}{}
+	if len(keys) == 0 {
+		return
+	}
+	statsModelCache.Del(keys...)
+	for _, key := range keys {
+		delete(statsModelCacheNeedUpdate, key)
+	}
+}
+
+// StatsModelUpdate 累加仍然存在的渠道模型统计并标记为待持久化。
+func StatsModelUpdate(channelID int, modelName string, metrics model.StatsMetrics) error {
+	statsModelCacheNeedUpdateLock.Lock()
+	defer statsModelCacheNeedUpdateLock.Unlock()
+	if _, ok := channelCache.Get(channelID); !ok {
+		return nil
+	}
+	key := statsModelKey(channelID, modelName)
+	modelCache, ok := statsModelCache.Get(key)
+	if !ok {
+		modelCache = model.StatsModel{
+			ChannelID: channelID,
+			Name:      modelName,
+		}
+	}
+	modelCache.StatsMetrics.Add(metrics)
+	statsModelCache.Set(key, modelCache)
+	statsModelCacheNeedUpdate[key] = struct{}{}
 	return nil
 }
 
@@ -467,6 +495,13 @@ func statsRefreshCache(ctx context.Context) error {
 		return fmt.Errorf("failed to get hourly stats: %v", result.Error)
 	}
 
+	// 落库用的是整行 Save，缓存必须先载入历史累计值，否则重启后首次落库会把库里的历史数据覆盖成重启后的增量。
+	var loadedModels []model.StatsModel
+	result = dbConn.Find(&loadedModels)
+	if result.Error != nil {
+		return fmt.Errorf("failed to get model stats: %v", result.Error)
+	}
+
 	statsDailyCacheLock.Lock()
 	statsDailyCache = loadedDaily
 	statsDailyCacheLock.Unlock()
@@ -481,6 +516,15 @@ func statsRefreshCache(ctx context.Context) error {
 	statsChannelCacheNeedUpdateLock.Unlock()
 	for _, v := range loadedChannels {
 		statsChannelCache.Set(v.ChannelID, v)
+	}
+
+	// 仅回填缓存，不标记待持久化，避免重启后白写一轮。
+	statsModelCache.Clear()
+	statsModelCacheNeedUpdateLock.Lock()
+	statsModelCacheNeedUpdate = make(map[string]struct{})
+	statsModelCacheNeedUpdateLock.Unlock()
+	for _, v := range loadedModels {
+		statsModelCache.Set(statsModelKey(v.ChannelID, v.Name), v)
 	}
 
 	var loadedAPIKeys []model.StatsAPIKey

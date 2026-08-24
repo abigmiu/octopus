@@ -4,7 +4,7 @@ import { useTranslations } from 'use-intl';
 import * as AccordionPrimitive from '@radix-ui/react-accordion';
 import { useModelChannelList, type LLMChannel } from '@/api/model';
 import { Button } from '@/components/ui/button';
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Accordion, AccordionContent, AccordionItem } from '@/components/ui/accordion';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -367,8 +367,12 @@ export function GroupEditor({
                                 <SelectContent>
                                     <SelectItem value="manual">{t('form.manual')}</SelectItem>
                                     <SelectItem value="failover">{t('form.failover')}</SelectItem>
+                                    <SelectItem value="session">{t('form.session')}</SelectItem>
                                 </SelectContent>
                             </Select>
+                            {mode === 'session' && (
+                                <FieldDescription>{t('form.sessionHint')}</FieldDescription>
+                            )}
                         </Field>
                     </div>
 
