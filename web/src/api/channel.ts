@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from './client';
-import { channelListQueryOptions, groupListQueryOptions, modelChannelListQueryOptions, modelListQueryOptions } from './queries';
+import { channelListQueryOptions, modelChannelListQueryOptions, modelListQueryOptions } from './queries';
 import { formatCount, formatMoney, formatTime } from '@/lib/utils';
 import { StatsChannel, type StatsMetricsFormatted } from './stats';
 /**
@@ -198,7 +198,6 @@ export function useUpdateChannel() {
             queryClient.invalidateQueries({ queryKey: channelListQueryOptions.queryKey });
             queryClient.invalidateQueries({ queryKey: modelListQueryOptions.queryKey });
             queryClient.invalidateQueries({ queryKey: modelChannelListQueryOptions.queryKey });
-            queryClient.invalidateQueries({ queryKey: groupListQueryOptions.queryKey });
         },
     });
 }
@@ -221,7 +220,6 @@ export function useDeleteChannel() {
             queryClient.invalidateQueries({ queryKey: channelListQueryOptions.queryKey });
             queryClient.invalidateQueries({ queryKey: modelListQueryOptions.queryKey });
             queryClient.invalidateQueries({ queryKey: modelChannelListQueryOptions.queryKey });
-            queryClient.invalidateQueries({ queryKey: groupListQueryOptions.queryKey });
         },
     });
 }
@@ -305,7 +303,6 @@ export function useSyncChannel() {
             queryClient.invalidateQueries({ queryKey: channelListQueryOptions.queryKey });
             queryClient.invalidateQueries({ queryKey: modelListQueryOptions.queryKey });
             queryClient.invalidateQueries({ queryKey: modelChannelListQueryOptions.queryKey });
-            queryClient.invalidateQueries({ queryKey: groupListQueryOptions.queryKey });
         },
     });
 }

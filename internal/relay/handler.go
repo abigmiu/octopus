@@ -7,8 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -24,7 +22,9 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// Forward 按客户端协议承载一个请求的完整转发过程: 解析请求, 定位分组, 循环选目标请求上游, 直至提交响应或请求结束。
+// Forward 按客户端协议承载一个请求的完整转发过程。
+// 目标由会话绑定给出: 每个新会话都要人工选择一次渠道和模型, 未选择前该会话的请求一直等待。
+// 客户端请求的 model 字段不参与选路, 只作为展示信息记录。
 func Forward(format llm.APIFormat) gin.HandlerFunc {
 	var inbound transformer.Inbound
 	switch format {
@@ -44,9 +44,9 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			return
 		}
 
-		// 此处只读取选组和分流所需字段; 完整协议校验由同协议上游或跨协议 pipeline 完成。
+		// 此处只读取展示和分流所需字段; 完整协议校验由同协议上游或跨协议 pipeline 完成。
 		var metadata struct {
-			Model     string `json:"model"`  // 客户端请求的分组名称。
+			Model     string `json:"model"`  // 客户端请求的模型名称, 仅用于展示。
 			Streaming bool   `json:"stream"` // 客户端是否请求流式响应。
 		}
 		if err := json.Unmarshal(raw.Body, &metadata); err != nil {
@@ -54,32 +54,23 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			return
 		}
 
-		// API Key 限定了模型范围时只放行范围内的模型, 为空表示不限制。
-		if allowed := c.GetString("supported_models"); allowed != "" && !slices.Contains(strings.Split(allowed, ","), metadata.Model) {
-			rejectRequest(c, inbound, errors.New("model not supported by this api key"))
+		// 会话身份由客户端信号或请求内容派生, 是本请求唯一的选路依据。
+		identity := identifySession(c.Request.Header, raw.Body)
+		if identity.id == "" {
+			// 没有会话身份就无法要求人工为该会话选择目标, 也不能沿用别的会话的绑定。
+			rejectRequest(c, inbound, errors.New("cannot identify a client session for this request"))
 			return
 		}
-
-		// 客户端请求的模型名称即分组名称; 分组不存在说明模型名错误, 等待也不会出现该分组。
-		initialGroup, err := op.GroupGetByName(metadata.Model)
-		if err != nil {
-			rejectRequest(c, inbound, errors.New("model not found"))
-			return
-		}
+		sessionID := identity.id
 
 		// 登记进程内请求状态, 返回的记录是后续全部状态写入和前端可视化推送的入口。
 		request := newRequestState(metadata.Model, string(raw.Body), c.GetInt("api_key_id"))
-		ctx := c.Request.Context()
-		failedItemID := 0 // 当前累计连续失败次数的成员 ID。
-		failures := 0     // 该成员包含首次请求的连续失败次数。
+		request.setSession(sessionID, identity.label)
+		registerSessionRequest(identity, metadata.Model, request.ID)
 
-		// 会话身份由客户端信号或请求内容派生, 与分组模式无关: 即使当前不是会话模式, 日志也按会话分组展示。
-		identity := identifySession(c.Request.Header, raw.Body)
-		sessionID := identity.id
-		if sessionID != "" {
-			request.setSession(sessionID, identity.label)
-			registerSessionRequest(identity, metadata.Model, request.ID, initialGroup.Mode == model.GroupModeSession)
-		}
+		ctx := c.Request.Context()
+		failedTarget := sessionTarget{} // 当前累计连续失败次数的目标。
+		failures := 0                   // 该目标包含首次请求的连续失败次数。
 
 		for {
 			if ctx.Err() != nil {
@@ -87,64 +78,37 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				return
 			}
 
-			// 分组配置和成员随时可改, 故每轮重新读取; 分组被删除时等待它重新出现。
-			group, err := op.GroupGetByName(metadata.Model)
+			// 转发配置随时可改, 故每轮重新读取。
+			config := op.RelayConfigGet()
+
+			// 尚未绑定时阻塞等待人工选择, 期间该会话在前端显示为待选。
+			target, ok, waitErr := awaitSessionTarget(ctx, sessionID)
+			if !ok {
+				if ctx.Err() != nil {
+					request.markCanceled(clientCanceledReason, "", nil)
+					return
+				}
+				if waitErr == nil {
+					waitErr = errors.New("no channel selected for this session")
+				}
+				recordSessionFailure(sessionID, waitErr.Error())
+				request.markFailed(waitErr, "", nil)
+				rejectRequest(c, inbound, waitErr)
+				return
+			}
+
+			// 绑定指向的渠道已被删除时等待, 期间人工改绑到别的渠道即可让请求继续。
+			channel, err := op.ChannelGet(target.channelID)
 			if err != nil {
-				if !request.wait(ctx, model.DefaultGroupRelayConfig().MemberRetryIntervalSeconds) {
+				recordSessionFailure(sessionID, err.Error())
+				if !request.wait(ctx, config.RetryIntervalSeconds) {
 					return
 				}
 				continue
 			}
 
-			// 定位本轮目标: 会话模式由会话绑定给出任意渠道与模型, 其余模式仍从分组成员中选择。
-			var item model.GroupItem
-			if group.Mode == model.GroupModeSession {
-				// 会话标识缺失说明请求正文无法派生身份, 该请求无法参与会话选路。
-				if sessionID == "" {
-					err := errors.New("session mode requires an identifiable client session")
-					request.markFailed(err, "", nil)
-					rejectRequest(c, inbound, err)
-					return
-				}
-				// 尚未绑定时阻塞等待人工选择, 期间该会话在前端显示为待选。
-				target, ok, waitErr := awaitSessionTarget(ctx, sessionID)
-				if !ok {
-					if ctx.Err() != nil {
-						request.markCanceled(clientCanceledReason, "", nil)
-						return
-					}
-					if waitErr == nil {
-						waitErr = errors.New("no channel selected for this session")
-					}
-					recordSessionFailure(sessionID, waitErr.Error())
-					request.markFailed(waitErr, "", nil)
-					rejectRequest(c, inbound, waitErr)
-					return
-				}
-				item = model.GroupItem{ChannelID: target.channelID, ModelName: target.modelName}
-			} else {
-				// 手动模式取人工指定的成员, 故障转移模式按优先级选择未禁用且不在冷却中的成员。
-				// 没有目标时等待重新选择, 期间人工切换渠道, 补齐成员或成员冷却到期即可让请求继续。
-				item = pickGroupItem(group)
-				if item.ID == 0 {
-					if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
-						return
-					}
-					continue
-				}
-			}
-
-			// 成员指向的渠道已被删除时同样等待, 该成员可能很快被改回可用渠道。
-			channel, err := op.ChannelGet(item.ChannelID)
-			if err != nil {
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
-					return
-				}
-				continue
-			}
-
-			// 将分组成员配置的真实模型写入本轮上游请求。
-			raw.Body, err = sjson.SetBytes(raw.Body, "model", item.ModelName)
+			// 将绑定的真实模型写入本轮上游请求。
+			raw.Body, err = sjson.SetBytes(raw.Body, "model", target.modelName)
 			if err != nil {
 				request.markFailed(err, "", nil)
 				rejectRequest(c, inbound, err)
@@ -160,28 +124,23 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				}
 			}
 
-			// 为本轮上游调用建立独立取消入口并登记当前目标。
-			// 首个有效响应的等待时限由分组配置给出: 超时以明确原因结束本轮, 而不是把请求挂到客户端自己放弃。
-			responseTimeout := time.Duration(group.RelayConfig.MemberNonStreamResponseTimeoutSeconds) * time.Second
+			// 首个有效响应的等待时限由全局配置给出: 超时以明确原因结束本轮, 而不是把请求挂到客户端自己放弃。
+			responseTimeout := time.Duration(config.ResponseTimeoutSeconds) * time.Second
 			if metadata.Streaming {
-				responseTimeout = time.Duration(group.RelayConfig.MemberStreamFirstEventTimeoutSeconds) * time.Second
+				responseTimeout = time.Duration(config.StreamFirstEventTimeoutSeconds) * time.Second
 			}
+			// 为本轮上游调用建立独立取消入口并登记当前目标。
 			roundCtx, cancelRound := context.WithCancel(ctx)
-			request.startRound(cancelRound, channel.Name, item.ModelName)
-			// 非会话模式的目标由分组路由决定, 逐轮同步到会话卡片以便一并查看当前渠道。
-			if group.Mode != model.GroupModeSession {
-				recordSessionTarget(sessionID, channel.Name, item.ModelName)
-			}
+			request.startRound(cancelRound, channel.Name, target.modelName)
 
 			// 按渠道协议构造出站转换器并确定是否可以直接透传。
 			roundStartedAt := time.Now() // 本轮上游调用的开始时间, 用于统计首个有效响应耗时。
 			outbound, passthrough, err := buildOutbound(channel, format)
 
 			// 请求上游并等待首个有效响应: 非流式等待完整响应, 流式等待首个事件。
-			// 同协议渠道原样直通, 跨协议渠道经转换后请求; 此时尚未写给客户端, 失败仍可换目标重试。
+			// 同协议渠道原样直通, 跨协议渠道经转换后请求; 此时尚未写给客户端, 失败仍可重试。
 			var result *upstreamResponse
 			if err == nil {
-				// 客户端与渠道协议一致时直接透传, 其余组合通过 pipeline 转换。
 				if passthrough {
 					result, err = sendPassthrough(roundCtx, format, raw, channel, outbound, metadata.Streaming, responseTimeout)
 				} else {
@@ -192,52 +151,39 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if err != nil {
 				// 记录本轮上游调用已经结束及其失败原因。
 				request.finishRound(err.Error(), ctx.Err() != nil)
-				// 父上下文结束说明客户端已经取消, 归还探测占用并以取消终态结束请求。
+				// 父上下文结束说明客户端已经取消。
 				if ctx.Err() != nil {
-					releaseRouteProbe(group, item.ID)
 					cancelRound()
 					request.markCanceled(clientCanceledReason, "", nil)
 					return
 				}
-				// 仅本轮上下文结束说明该轮被人工中止, 不计失败也不等待, 立即重新选择目标。
+				// 仅本轮上下文结束说明绑定被人工改动或该轮被人工中止, 不计失败也不等待, 立即按新绑定重试。
 				if roundCtx.Err() != nil {
-					releaseRouteProbe(group, item.ID)
 					cancelRound()
+					failedTarget = sessionTarget{}
+					failures = 0
 					continue
 				}
 				cancelRound()
-				// 本轮真实失败只计入当前渠道和成员, 客户端取消与人工中止不计为渠道故障。
+				// 本轮真实失败只计入当前渠道和模型, 客户端取消与人工中止不计为渠道故障。
 				metrics := model.StatsMetrics{WaitTime: time.Since(roundStartedAt).Milliseconds(), RequestFailed: 1}
 				_ = op.StatsChannelUpdate(channel.ID, metrics)
-				_ = op.StatsModelUpdate(channel.ID, item.ModelName, metrics)
+				_ = op.StatsModelUpdate(channel.ID, target.modelName, metrics)
 				recordSessionFailure(sessionID, err.Error())
 
-				// 会话模式的目标由人工绑定, 不切换渠道: 按配置重试同一目标, 耗尽后失败并保留绑定等待人工换目标。
-				if group.Mode == model.GroupModeSession {
-					failures++
-					if failures >= group.RelayConfig.MemberMaxAttempts {
-						request.markFailed(err, "", nil)
-						rejectRequest(c, inbound, err)
-						return
-					}
-					if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
-						return
-					}
-					continue
-				}
-
-				// 成员改变时重新开始累计该成员在本请求内的连续失败次数。
-				if failedItemID == item.ID {
+				// 目标由人工绑定, 失败不自动换渠道: 按配置重试同一目标, 耗尽后失败并保留绑定等待人工换目标。
+				if failedTarget == target {
 					failures++
 				} else {
-					failedItemID = item.ID
+					failedTarget = target
 					failures = 1
 				}
-				// 达到总尝试次数时成员进入冷却并立即重新选路, 否则等待后重试。
-				if recordRouteFailure(group, item.ID, failures) {
-					continue
+				if failures >= config.MaxAttempts {
+					request.markFailed(err, "", nil)
+					rejectRequest(c, inbound, err)
+					return
 				}
-				if !request.wait(ctx, group.RelayConfig.MemberRetryIntervalSeconds) {
+				if !request.wait(ctx, config.RetryIntervalSeconds) {
 					return
 				}
 				continue
@@ -245,8 +191,6 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			// 记录本轮已经取得可提交的上游响应。
 			request.finishRound("", false)
 			roundWaitTime := time.Since(roundStartedAt).Milliseconds() // 流式响应只统计等待首帧的时间。
-			// 上游成功后解除该成员的冷却与探测占用, 并按路由配置开始亲和。
-			recordRouteSuccess(group, item.ID)
 			// 同协议透传时原样返回上游响应头; 跨协议响应没有需要透传的响应头。
 			for key, values := range result.header {
 				c.Writer.Header()[key] = values
@@ -258,12 +202,12 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				if c.Writer.Header().Get("Content-Type") == "" {
 					c.Header("Content-Type", "application/json")
 				}
-				// 非流式响应已有完整用量, 本轮渠道和成员统计可在提交前一次完成。
-				metrics := usageMetrics(item.ModelName, result.usage)
+				// 非流式响应已有完整用量, 本轮渠道和模型统计可在提交前一次完成。
+				metrics := usageMetrics(target.modelName, result.usage)
 				metrics.WaitTime = roundWaitTime
 				metrics.RequestSuccess = 1
 				_ = op.StatsChannelUpdate(channel.ID, metrics)
-				_ = op.StatsModelUpdate(channel.ID, item.ModelName, metrics)
+				_ = op.StatsModelUpdate(channel.ID, target.modelName, metrics)
 				recordSessionSuccess(sessionID, result.usage, metrics)
 				request.markCommitted()
 				n, err := c.Writer.Write(result.body)
@@ -322,7 +266,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 					break
 				}
 				event = result.events.Current()
-				// 已提交的响应不能再换目标重试, 结束事件自身携带的失败原样转发给客户端, 并在转发后作为本请求终态。
+				// 已提交的响应不能再重试, 结束事件自身携带的失败原样转发给客户端, 并在转发后作为本请求终态。
 				last, err = inspectStreamEvent(format, event)
 			}
 			result.events.Close()
@@ -332,8 +276,8 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			if aggregateErr == nil {
 				result.usage = meta.Usage
 			}
-			// 流式响应结束并聚合出用量后, 按最终结果完成本轮渠道和成员统计。
-			metrics := usageMetrics(item.ModelName, result.usage)
+			// 流式响应结束并聚合出用量后, 按最终结果完成本轮渠道和模型统计。
+			metrics := usageMetrics(target.modelName, result.usage)
 			metrics.WaitTime = roundWaitTime
 			if err == nil {
 				metrics.RequestSuccess = 1
@@ -341,7 +285,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 				metrics.RequestFailed = 1
 			}
 			_ = op.StatsChannelUpdate(channel.ID, metrics)
-			_ = op.StatsModelUpdate(channel.ID, item.ModelName, metrics)
+			_ = op.StatsModelUpdate(channel.ID, target.modelName, metrics)
 			if err != nil {
 				recordSessionFailure(sessionID, err.Error())
 				if ctx.Err() != nil {

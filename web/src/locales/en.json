@@ -35,13 +35,11 @@
         "expireAt": "Expires",
         "neverExpire": "Never",
         "daysLeft": "days left",
-        "expired": "Expired",
-        "supportedModels": "Supported Models"
+        "expired": "Expired"
     },
     "navbar": {
         "home": "Home",
         "channel": "Channel",
-        "group": "Group",
         "model": "Price",
         "log": "Log",
         "setting": "Setting"
@@ -61,11 +59,6 @@
                     "all": "All channels",
                     "enabled": "Enabled only",
                     "disabled": "Disabled only"
-                },
-                "group": {
-                    "all": "All groups",
-                    "withMembers": "With members",
-                    "empty": "Empty groups"
                 },
                 "model": {
                     "all": "All models",
@@ -133,6 +126,26 @@
     "setting": {
         "appearance": "Appearance",
         "system": "System",
+        "relay": {
+            "title": "Relay",
+            "invalid": "Please enter a positive integer",
+            "maxAttempts": {
+                "label": "Maximum Attempts",
+                "hint": "Total attempts per channel, including the first request"
+            },
+            "retryInterval": {
+                "label": "Retry Interval (s)",
+                "hint": "Wait time between two attempts on the same channel"
+            },
+            "responseTimeout": {
+                "label": "Response Timeout (s)",
+                "hint": "Maximum wait for a complete non-stream response"
+            },
+            "streamFirstEventTimeout": {
+                "label": "Stream First Event Timeout (s)",
+                "hint": "Maximum wait for the first valid stream event"
+            }
+        },
         "theme": {
             "label": "Theme",
             "light": "Light",
@@ -191,9 +204,6 @@
                 "expireAt": "Expire Date",
                 "selectDate": "Select date",
                 "neverExpire": "Never Expire",
-                "supportedModels": "Supported Models",
-                "noModels": "No models available",
-                "modelsHint": "Leave empty for unlimited",
                 "enabled": "Enabled",
                 "cancel": "Cancel",
                 "create": "Create",
@@ -323,62 +333,6 @@
             "unsupported": "This browser does not support notifications"
         }
     },
-    "group": {
-        "toast": {
-            "createFailed": "Create failed",
-            "updated": "Updated successfully",
-            "updateFailed": "Update failed",
-            "deleted": "Deleted successfully"
-        },
-        "create": {
-            "title": "Create Group",
-            "submit": "Create",
-            "submitting": "Creating..."
-        },
-        "card": {
-            "empty": "No rules",
-            "activate": "Set as active",
-            "cooling": "Cooling {seconds}s",
-            "affinity": "Affinity {seconds}s"
-        },
-        "detail": {
-            "actions": {
-                "edit": "Edit",
-                "cancel": "Cancel",
-                "save": "Save",
-                "copyName": "Copy Name",
-                "delete": "Delete",
-                "confirmDelete": "Confirm Delete"
-            }
-        },
-        "form": {
-            "name": "Group Name",
-            "mode": "Routing Mode",
-            "modeHint": "Manual fixes one member; failover follows member order and switches on failures; by session picks a channel manually for every new session",
-            "manual": "Manual",
-            "failover": "Failover",
-            "members": "Members",
-            "relay": "Routing",
-            "retryCount": "Maximum Attempts",
-            "retryCountHint": "Total attempts per member, including the first request",
-            "retryInterval": "Retry Interval (s)",
-            "retryIntervalHint": "Wait time between attempts on the same member",
-            "nonStreamTimeout": "Non-stream Timeout (s)",
-            "nonStreamTimeoutHint": "Maximum wait for a complete non-stream response",
-            "streamTimeout": "Stream First Event Timeout (s)",
-            "streamTimeoutHint": "Maximum wait for the first valid stream event",
-            "cooldown": "Cooldown (s)",
-            "cooldownHint": "Time a member is paused after retries are exhausted",
-            "affinity": "Failover Affinity (s)",
-            "affinityHint": "Time to keep the fallback member after its first successful request",
-            "items": "Member Order",
-            "addItem": "Add Model",
-            "autoAdd": "Auto Add",
-            "clear": "Clear",
-            "session": "By Session",
-            "sessionHint": "Every new session waits until you pick a channel and model on the log page"
-        }
-    },
     "model": {
         "create": {
             "title": "Create Model",
@@ -426,11 +380,7 @@
             "unknownModel": "Unknown model",
             "detailUnavailable": "Body content unavailable",
             "requestContent": "Request Body",
-            "group": "Group",
-            "groupUnavailable": "No group matches this request model",
-            "noGroupItems": "No channels are available in this group",
             "channelChanged": "Channel switched",
-            "channelCleared": "Channel selection cleared",
             "channelChangeFailed": "Failed to switch channel",
             "responseContent": "Response Content",
             "noRequestContent": "(No request content)",
@@ -444,11 +394,10 @@
             "waitingResponse": "Waiting for upstream response",
             "responseStreaming": "Upstream responded; streaming is in progress",
             "cancelReason": "Cancel Reason",
-            "cancelReasonWith": "Canceled: {reason}",
-            "sessionUnavailable": "This request is not bound to a session"
+            "cancelReasonWith": "Canceled: {reason}"
         },
         "session": {
-            "ungrouped": "Ungrouped requests",
+            "ungrouped": "Requests without a session",
             "status": {
                 "pending": "Waiting",
                 "bound": "Bound",
@@ -462,7 +411,6 @@
             },
             "searchPlaceholder": "Search channel or model",
             "noCandidates": "No matching channel",
-            "favorite": "Common",
             "unboundChannel": "Pick a channel",
             "unboundModel": "Pick a model",
             "unbind": "Unbind",

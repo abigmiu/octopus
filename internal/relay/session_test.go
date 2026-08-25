@@ -102,8 +102,8 @@ func TestIdentifySessionContentHashAcrossTurns(t *testing.T) {
 	}
 
 	// 首轮登记会话后，后续轮通过备用标识命中同一会话。
-	registerSessionRequest(first, "group-a", 1, true)
-	registerSessionRequest(second, "group-a", 2, true)
+	registerSessionRequest(first, "claude-opus-5", 1)
+	registerSessionRequest(second, "claude-opus-5", 2)
 
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
@@ -142,7 +142,7 @@ func TestAwaitSessionTargetUnblocksOnBind(t *testing.T) {
 	resetSessions(t)
 
 	identity := sessionIdentity{id: "claude:wait-1", label: "等待中", client: SessionClientClaudeCode}
-	registerSessionRequest(identity, "group-a", 1, true)
+	registerSessionRequest(identity, "claude-opus-5", 1)
 
 	type outcome struct {
 		target sessionTarget
@@ -205,7 +205,7 @@ func TestAwaitSessionTargetClientCanceled(t *testing.T) {
 	resetSessions(t)
 
 	identity := sessionIdentity{id: "claude:cancel-1", client: SessionClientClaudeCode}
-	registerSessionRequest(identity, "group-a", 1, true)
+	registerSessionRequest(identity, "claude-opus-5", 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -237,7 +237,7 @@ func TestTrimSessionsKeepsPending(t *testing.T) {
 	resetSessions(t)
 
 	pending := sessionIdentity{id: "claude:pending", client: SessionClientClaudeCode}
-	registerSessionRequest(pending, "group-a", 1, true)
+	registerSessionRequest(pending, "claude-opus-5", 1)
 	sessionMu.Lock()
 	sessions[pending.id].PendingCount = 1
 	sessions[pending.id].LastActiveAt = time.Now().Add(-time.Hour)
@@ -245,7 +245,7 @@ func TestTrimSessionsKeepsPending(t *testing.T) {
 
 	for i := 0; i < maxSessions+3; i++ {
 		identity := sessionIdentity{id: "claude:bulk-" + string(rune('a'+i)), client: SessionClientClaudeCode}
-		registerSessionRequest(identity, "group-a", uint64(100+i), true)
+		registerSessionRequest(identity, "claude-opus-5", uint64(100+i))
 	}
 
 	sessionMu.Lock()
@@ -263,7 +263,7 @@ func TestSessionUsageAndFailure(t *testing.T) {
 	resetSessions(t)
 
 	identity := sessionIdentity{id: "claude:usage-1", client: SessionClientClaudeCode}
-	registerSessionRequest(identity, "group-a", 1, true)
+	registerSessionRequest(identity, "claude-opus-5", 1)
 	sessionMu.Lock()
 	sessions[identity.id].ChannelID = 3
 	sessions[identity.id].ModelName = "m"
@@ -299,7 +299,7 @@ func TestSessionMessageDoesNotShareInternals(t *testing.T) {
 	resetSessions(t)
 
 	identity := sessionIdentity{id: "claude:copy-1", client: SessionClientClaudeCode}
-	registerSessionRequest(identity, "group-a", 1, true)
+	registerSessionRequest(identity, "claude-opus-5", 1)
 	recordSessionSuccess(identity.id, &llm.Usage{PromptTokens: 5, PromptTokensDetails: promptDetailsForTest(2)}, statsMetricsForTest(0))
 
 	sessionMu.Lock()
@@ -312,5 +312,54 @@ func TestSessionMessageDoesNotShareInternals(t *testing.T) {
 	}
 	if message.Usage.PromptTokensDetails.CachedTokens != 2 {
 		t.Fatalf("cached tokens = %d, want 2", message.Usage.PromptTokensDetails.CachedTokens)
+	}
+}
+
+// Claude Code 会把提醒块注入用户消息，标签必须取用户真实输入而不是这段固定文本。
+func TestSessionLabelSkipsInjectedBlocks(t *testing.T) {
+	body := []byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[
+		{"type":"text","text":"<system-reminder>\nAs you answer the user's questions, you can use the following context.\n</system-reminder>"},
+		{"type":"text","text":"帮我看下这个报错"}]}]}`)
+	if label := sessionLabel(SessionClientClaudeCode, body); label != "帮我看下这个报错" {
+		t.Fatalf("label = %q", label)
+	}
+}
+
+// 注入块在每个新会话里完全相同，剔除后不同会话必须派生出不同的内容哈希，否则会共用上一个会话的绑定。
+func TestContentSessionIDDistinguishesNewConversations(t *testing.T) {
+	reminder := `{"type":"text","text":"<system-reminder>\nAs you answer the user's questions, you can use the following context.\n</system-reminder>"}`
+	first, _ := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[` +
+		reminder + `,{"type":"text","text":"第一个会话的问题"}]}]}`))
+	second, _ := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[` +
+		reminder + `,{"type":"text","text":"第二个会话的问题"}]}]}`))
+
+	if first == "" || second == "" {
+		t.Fatalf("ids = (%q, %q), both should be derived", first, second)
+	}
+	if first == second {
+		t.Fatal("two different conversations collapsed into one session id")
+	}
+}
+
+// 只有注入块而没有真实用户输入时不得派生标识，否则全部会话会折叠成同一个并共用绑定。
+func TestContentSessionIDRefusesWithoutRealUserInput(t *testing.T) {
+	id, alias := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[
+		{"type":"text","text":"<system-reminder>\nAs you answer the user's questions.\n</system-reminder>"}]}]}`))
+	if id != "" || alias != "" {
+		t.Fatalf("ids = (%q, %q), want empty", id, alias)
+	}
+}
+
+// metadata.user_id 的驼峰命名与非十六进制后缀都要能取出会话标识。
+func TestClaudeMetadataSessionIDVariants(t *testing.T) {
+	cases := map[string]string{
+		`{"metadata":{"user_id":"{\"sessionId\":\"S-42\"}"}}`:           "S-42",
+		`{"metadata":{"user_id":"user_ab_account_cd_session_AbC-123"}}`: "AbC-123",
+		`{"metadata":{"user_id":"{\"session_id\":\"2f1e8c04-aaaa\"}"}}`: "2f1e8c04-aaaa",
+	}
+	for body, want := range cases {
+		if got := claudeMetadataSessionID([]byte(body)); got != want {
+			t.Fatalf("body %s -> %q, want %q", body, got, want)
+		}
 	}
 }

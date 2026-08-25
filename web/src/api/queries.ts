@@ -1,7 +1,6 @@
 import { queryOptions } from '@tanstack/react-query';
 import type { APIKey, APIKeyStatsResponse } from './apikey';
 import type { ChannelServer } from './channel';
-import type { Group } from './group';
 import type { LLMChannel, LLMInfo } from './model';
 import type { StatsDailyResponse, StatsHourly, StatsTotal } from './stats';
 import { apiRequest } from './client';
@@ -22,12 +21,6 @@ export const apiKeyListQueryOptions = queryOptions({
 export const channelListQueryOptions = queryOptions({
     queryKey: ['channels', 'list'],
     queryFn: () => apiRequest<ChannelServer[]>('/api/v1/channel/list'),
-});
-
-// groupListQueryOptions 供页面查询和启动预取共享分组列表定义。
-export const groupListQueryOptions = queryOptions({
-    queryKey: ['groups', 'list'],
-    queryFn: () => apiRequest<Group[]>('/api/v1/group/list'),
 });
 
 // modelListQueryOptions 供页面查询和启动预取共享模型列表定义。

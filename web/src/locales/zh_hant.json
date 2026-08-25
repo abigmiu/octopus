@@ -35,13 +35,11 @@
         "expireAt": "過期時間",
         "neverExpire": "永不過期",
         "daysLeft": "天後到期",
-        "expired": "已過期",
-        "supportedModels": "支援的模型"
+        "expired": "已過期"
     },
     "navbar": {
         "home": "主頁",
         "channel": "供應源",
-        "group": "分組",
         "model": "價格",
         "log": "日誌",
         "setting": "設定"
@@ -61,11 +59,6 @@
                     "all": "全部供應源",
                     "enabled": "僅啟用",
                     "disabled": "僅停用"
-                },
-                "group": {
-                    "all": "全部分組",
-                    "withMembers": "有成員",
-                    "empty": "空分組"
                 },
                 "model": {
                     "all": "全部模型",
@@ -133,6 +126,26 @@
     "setting": {
         "appearance": "外觀",
         "system": "系統",
+        "relay": {
+            "title": "轉發",
+            "invalid": "請輸入正整數",
+            "maxAttempts": {
+                "label": "總嘗試次數",
+                "hint": "單個供應源包含首次請求的總嘗試次數"
+            },
+            "retryInterval": {
+                "label": "重試間隔（秒）",
+                "hint": "同一供應源相鄰兩次嘗試的等待時間"
+            },
+            "responseTimeout": {
+                "label": "回應逾時（秒）",
+                "hint": "等待完整非串流回應的最長時間"
+            },
+            "streamFirstEventTimeout": {
+                "label": "串流首事件逾時（秒）",
+                "hint": "等待首個有效串流事件的最長時間"
+            }
+        },
         "theme": {
             "label": "主題",
             "light": "淺色",
@@ -191,9 +204,6 @@
                 "expireAt": "過期日期",
                 "selectDate": "選擇日期",
                 "neverExpire": "永不過期",
-                "supportedModels": "支援的模型",
-                "noModels": "暫無可選模型",
-                "modelsHint": "不選擇則為無限制",
                 "enabled": "是否啟用",
                 "cancel": "取消",
                 "create": "建立",
@@ -323,62 +333,6 @@
             "unsupported": "目前瀏覽器不支援通知"
         }
     },
-    "group": {
-        "toast": {
-            "createFailed": "建立失敗",
-            "updated": "更新成功",
-            "updateFailed": "更新失敗",
-            "deleted": "刪除成功"
-        },
-        "create": {
-            "title": "建立分組",
-            "submit": "建立",
-            "submitting": "建立中..."
-        },
-        "card": {
-            "empty": "暫無規則",
-            "activate": "設為活動項",
-            "cooling": "冷卻 {seconds}s",
-            "affinity": "親和 {seconds}s"
-        },
-        "detail": {
-            "actions": {
-                "edit": "編輯",
-                "cancel": "取消",
-                "save": "儲存",
-                "copyName": "複製名稱",
-                "delete": "刪除",
-                "confirmDelete": "確認刪除"
-            }
-        },
-        "form": {
-            "name": "分組名稱",
-            "mode": "路由模式",
-            "modeHint": "手動固定選中成員；故障轉移按成員順序並在失敗時切換；依工作階段手動為每個新工作階段單獨選擇供應源",
-            "manual": "手動",
-            "failover": "故障轉移",
-            "members": "成員",
-            "relay": "路由策略",
-            "retryCount": "總嘗試次數",
-            "retryCountHint": "單個成員包含首次請求的總嘗試次數",
-            "retryInterval": "重試間隔（秒）",
-            "retryIntervalHint": "同一成員相鄰兩次嘗試的等待時間",
-            "nonStreamTimeout": "非串流逾時（秒）",
-            "nonStreamTimeoutHint": "等待完整非串流回應的最長時間",
-            "streamTimeout": "串流首事件逾時（秒）",
-            "streamTimeoutHint": "等待首個有效串流事件的最長時間",
-            "cooldown": "冷卻時間（秒）",
-            "cooldownHint": "成員重試耗盡後暫停使用的時間",
-            "affinity": "故障切換親和時間（秒）",
-            "affinityHint": "備用成員首次請求成功後繼續使用該成員的時間",
-            "items": "成員順序",
-            "addItem": "新增模型",
-            "autoAdd": "自動新增",
-            "clear": "清空",
-            "session": "依工作階段手動",
-            "sessionHint": "每個新工作階段都需要在日誌頁手動選擇供應源和模型後才會繼續"
-        }
-    },
     "model": {
         "create": {
             "title": "建立模型",
@@ -426,11 +380,7 @@
             "unknownModel": "未知模型",
             "detailUnavailable": "正文內容不可用",
             "requestContent": "請求體",
-            "group": "分組",
-            "groupUnavailable": "目前請求模型沒有對應分組",
-            "noGroupItems": "目前分組沒有可用供應源",
             "channelChanged": "供應源已切換",
-            "channelCleared": "已取消供應源選擇",
             "channelChangeFailed": "供應源切換失敗",
             "responseContent": "回應內容",
             "noRequestContent": "(無請求內容)",
@@ -444,11 +394,10 @@
             "waitingResponse": "正在等待上游回應",
             "responseStreaming": "上游已回應，串流傳輸正在進行",
             "cancelReason": "取消原因",
-            "cancelReasonWith": "已取消：{reason}",
-            "sessionUnavailable": "該請求沒有關聯工作階段"
+            "cancelReasonWith": "已取消：{reason}"
         },
         "session": {
-            "ungrouped": "未分組請求",
+            "ungrouped": "未歸屬工作階段的請求",
             "status": {
                 "pending": "等待選擇",
                 "bound": "已綁定",
@@ -462,7 +411,6 @@
             },
             "searchPlaceholder": "搜尋供應源或模型",
             "noCandidates": "沒有符合的供應源",
-            "favorite": "常用",
             "unboundChannel": "選擇供應源",
             "unboundModel": "選擇模型",
             "unbind": "解除綁定",

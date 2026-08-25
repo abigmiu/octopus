@@ -11,7 +11,7 @@ export interface SessionOverview {
     id: string;
     label: string;
     client: string;
-    group: string;
+    requested_model: string; // 客户端本次请求的模型名, 仅供展示。
     status: SessionStatus;
     channel_id: number;
     channel_name: string;

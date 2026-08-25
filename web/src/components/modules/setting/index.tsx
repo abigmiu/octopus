@@ -1,6 +1,7 @@
 import { SettingAppearance } from './Appearance';
 import { SettingNotification } from './Notification';
 import { SettingSystem } from './System';
+import { SettingRelay } from './Relay';
 import { SettingAPIKey } from './APIKey';
 import { SettingLLMPrice } from './LLMPrice';
 import { SettingAccount } from './Account';
@@ -19,6 +20,7 @@ export function Setting() {
                 <SettingNotification />
                 <SettingAccount />
                 <SettingSystem />
+                <SettingRelay />
                 <SettingLog />
                 <SettingLLMPrice />
                 <SettingAPIKey />

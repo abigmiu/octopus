@@ -9,12 +9,10 @@ type DBDump struct {
 	ExportedAt   time.Time `json:"exported_at"`
 	IncludeStats bool      `json:"include_stats"`
 
-	Channels   []Channel   `json:"channels,omitempty"`
-	Groups     []Group     `json:"groups,omitempty"`
-	GroupItems []GroupItem `json:"group_items,omitempty"`
-	LLMInfos   []LLMInfo   `json:"llm_infos,omitempty"`
-	APIKeys    []APIKey    `json:"api_keys,omitempty"`
-	Settings   []Setting   `json:"settings,omitempty"`
+	Channels []Channel `json:"channels,omitempty"`
+	LLMInfos []LLMInfo `json:"llm_infos,omitempty"`
+	APIKeys  []APIKey  `json:"api_keys,omitempty"`
+	Settings []Setting `json:"settings,omitempty"`
 
 	StatsTotal   []StatsTotal   `json:"stats_total,omitempty"`
 	StatsDaily   []StatsDaily   `json:"stats_daily,omitempty"`

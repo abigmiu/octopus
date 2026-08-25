@@ -4,7 +4,6 @@ import type { Page } from '@/stores/app';
 export const pageImports = {
     home: () => import('@/components/modules/home'),
     channel: () => import('@/components/modules/channel'),
-    group: () => import('@/components/modules/group'),
     model: () => import('@/components/modules/model'),
     log: () => import('@/components/modules/log'),
     setting: () => import('@/components/modules/setting'),

@@ -15,6 +15,10 @@ export const SettingKey = {
     ModelInfoUpdateInterval: 'model_info_update_interval',
     SyncLLMInterval: 'sync_llm_interval',
     CORSAllowOrigins: 'cors_allow_origins',
+    RelayMaxAttempts: 'relay_max_attempts',
+    RelayRetryIntervalSeconds: 'relay_retry_interval_seconds',
+    RelayResponseTimeoutSeconds: 'relay_response_timeout_seconds',
+    RelayStreamFirstEventTimeoutSeconds: 'relay_stream_first_event_timeout_seconds',
 } as const;
 
 /**

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/bestruirui/octopus/internal/model"
@@ -11,7 +12,6 @@ import (
 	"github.com/bestruirui/octopus/internal/server/resp"
 	"github.com/bestruirui/octopus/internal/server/router"
 	"github.com/gin-gonic/gin"
-	"github.com/samber/lo"
 )
 
 func init() {
@@ -58,16 +58,21 @@ func init() {
 		)
 }
 
+// getModelList 返回所有启用渠道暴露的模型去重合集，按名称排序保证结果稳定。
 func getModelList(c *gin.Context) {
-	models := op.GroupListModel()
-	if supportedModelsValue := c.GetString("supported_models"); supportedModelsValue != "" {
-		supportedModels := lo.Map(strings.Split(supportedModelsValue, ","), func(s string, _ int) string {
-			return strings.TrimSpace(s)
-		})
-		models = lo.Filter(models, func(m string, _ int) bool {
-			return lo.Contains(supportedModels, m)
-		})
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+	for _, llm := range op.ChannelLLMList() {
+		if !llm.Enabled || llm.Name == "" {
+			continue
+		}
+		if _, ok := seen[llm.Name]; ok {
+			continue
+		}
+		seen[llm.Name] = struct{}{}
+		models = append(models, llm.Name)
 	}
+	sort.Strings(models)
 
 	if c.GetHeader("x-api-key") != "" {
 		var anthropicModels []model.AnthropicModel

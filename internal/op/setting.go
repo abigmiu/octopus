@@ -122,3 +122,22 @@ func settingRefreshCache(ctx context.Context) error {
 	}
 	return nil
 }
+
+// RelayConfigGet 返回全局转发配置; 任一项缺失或非法时回落到默认值, 使配置损坏不至于让转发不可用。
+func RelayConfigGet() model.RelayConfig {
+	config := model.DefaultRelayConfig()
+	for _, item := range []struct {
+		key    model.SettingKey
+		target *int
+	}{
+		{model.SettingKeyRelayMaxAttempts, &config.MaxAttempts},
+		{model.SettingKeyRelayRetryInterval, &config.RetryIntervalSeconds},
+		{model.SettingKeyRelayResponseTimeout, &config.ResponseTimeoutSeconds},
+		{model.SettingKeyRelayStreamFirstTimeout, &config.StreamFirstEventTimeoutSeconds},
+	} {
+		if value, err := SettingGetInt(item.key); err == nil && value > 0 {
+			*item.target = value
+		}
+	}
+	return config
+}

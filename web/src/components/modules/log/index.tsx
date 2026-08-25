@@ -2,11 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Logs } from 'lucide-react';
 import { useTranslations } from 'use-intl';
 import { useLogs, type RelayLogOverview } from '@/api/log';
-import { useGroupList } from '@/api/group';
 import { useModelChannelList } from '@/api/model';
 import { useSessions } from '@/api/session';
 import { VirtualizedGrid } from '@/components/common/VirtualizedGrid';
-import { modelChannelKey } from '@/components/modules/group/utils';
 import { useSessionViewStore } from '@/stores/session';
 import { SessionCard, type SessionBucket } from './Session';
 
@@ -21,19 +19,9 @@ export function Log() {
     const { logs, isLoading, error } = useLogs();
     const { sessions, error: sessionError } = useSessions();
     const { data: modelChannels = [] } = useModelChannelList();
-    const { data: groups = [] } = useGroupList();
     const focusSessionId = useSessionViewStore((state) => state.focusSessionId);
     const clearFocusSession = useSessionViewStore((state) => state.clearFocusSession);
     const [collapsedOverrides, setCollapsedOverrides] = useState<Record<string, boolean>>({}); // 用户手动折叠或展开的会话，覆盖默认展开策略。
-
-    // groupMemberKeys 提供分组成员集合，用于在切换器里把常用组合置顶。
-    const groupMemberKeys = useMemo(() => {
-        const map = new Map<string, Set<string>>();
-        groups.forEach((group) => {
-            map.set(group.name, new Set((group.items ?? []).map((item) => modelChannelKey(item.channel_id, item.model_name))));
-        });
-        return map;
-    }, [groups]);
 
     // buckets 把请求按 session_id 归到会话下: 会话顺序跟随会话流的最近活跃倒序,
     // 会话内请求沿用日志流已有的 ID 倒序, 未归属的请求统一放在末尾。
@@ -118,7 +106,6 @@ export function Log() {
                             <SessionCard
                                 bucket={bucket}
                                 modelChannels={modelChannels}
-                                groupMemberKeys={groupMemberKeys}
                                 expanded={collapsed === undefined || focused ? defaultExpanded : !collapsed}
                                 highlighted={focused}
                                 onToggle={handleToggle}

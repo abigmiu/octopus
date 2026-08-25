@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { memberKey } from '@/components/modules/group/utils';
+import { memberKey } from '@/lib/model-channel';
 import { LogCard } from './Item';
 
 // PENDING_TIMEOUT_MS 是后端让等待中的请求失败前留给管理员的选择窗口。
@@ -44,10 +44,9 @@ export interface SessionBucket {
     logs: RelayLogOverview[];
 }
 
-// SessionChannelPicker 渲染可搜索的渠道模型选择列表，分组成员置顶并标注常用。
+// SessionChannelPicker 渲染可搜索的渠道模型选择列表。
 function SessionChannelPicker({
     options,
-    favoriteKeys,
     currentKey,
     disabled,
     isSubmitting,
@@ -56,7 +55,6 @@ function SessionChannelPicker({
     onSelect,
 }: {
     options: LLMChannel[];
-    favoriteKeys: Set<string>;
     currentKey: string;
     disabled: boolean;
     isSubmitting: boolean;
@@ -71,19 +69,10 @@ function SessionChannelPicker({
 
     const entries = useMemo(() => {
         const normalized = keyword.trim().toLowerCase();
-        const favorites: LLMChannel[] = [];
-        const others: LLMChannel[] = [];
-        options.forEach((option) => {
-            if (normalized
-                && !option.name.toLowerCase().includes(normalized)
-                && !option.channel_name.toLowerCase().includes(normalized)) return;
-            (favoriteKeys.has(memberKey(option)) ? favorites : others).push(option);
-        });
-        return [
-            ...favorites.map((option) => ({ option, favorite: true })),
-            ...others.map((option) => ({ option, favorite: false })),
-        ];
-    }, [favoriteKeys, keyword, options]);
+        if (!normalized) return options;
+        return options.filter((option) => option.name.toLowerCase().includes(normalized)
+            || option.channel_name.toLowerCase().includes(normalized));
+    }, [keyword, options]);
 
     return (
         <Popover open={open} onOpenChange={setOpen}>
@@ -126,7 +115,7 @@ function SessionChannelPicker({
                         </div>
                     ) : (
                         <div className="flex flex-col gap-1">
-                            {entries.map(({ option, favorite }) => {
+                            {entries.map((option) => {
                                 const key = memberKey(option);
                                 const { Icon: OptionIcon, className: optionIconClassName } = getModelIcon(option.name);
                                 const isCurrent = key === currentKey;
@@ -150,11 +139,6 @@ function SessionChannelPicker({
                                             <span className="block truncate font-medium text-foreground">{option.channel_name}</span>
                                             <span className="block truncate text-[11px] text-muted-foreground">{option.name}</span>
                                         </span>
-                                        {favorite && (
-                                            <Badge variant="outline" className="shrink-0 border-primary/30 bg-primary/10 px-1.5 py-0 text-[10px] text-primary">
-                                                {t('favorite')}
-                                            </Badge>
-                                        )}
                                         {isCurrent && <Check className="size-3.5 shrink-0 text-primary" />}
                                     </button>
                                 );
@@ -171,14 +155,12 @@ function SessionChannelPicker({
 export const SessionCard = memo(function SessionCard({
     bucket,
     modelChannels,
-    groupMemberKeys,
     expanded,
     highlighted,
     onToggle,
 }: {
     bucket: SessionBucket;
     modelChannels: LLMChannel[]; // 所有渠道与模型的候选组合。
-    groupMemberKeys: Map<string, Set<string>>; // 分组名到成员键集合的映射，用于标注常用项。
     expanded: boolean;
     highlighted: boolean; // highlighted 表示该会话是通知点击后定位过来的。
     onToggle: (key: string, next: boolean) => void;
@@ -197,11 +179,6 @@ export const SessionCard = memo(function SessionCard({
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
     }, [isPending]);
-
-    const favoriteKeys = useMemo(
-        () => (session ? groupMemberKeys.get(session.group) : undefined) ?? new Set<string>(),
-        [groupMemberKeys, session]
-    );
 
     const handleSelect = useCallback((option: LLMChannel) => {
         if (!session) return;
@@ -250,7 +227,7 @@ export const SessionCard = memo(function SessionCard({
                     {session && (
                         <>
                             <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px]">{clientLabel}</Badge>
-                            <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] text-muted-foreground">{session.group}</Badge>
+                            <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] text-muted-foreground">{session.requested_model}</Badge>
                             <Badge
                                 variant="outline"
                                 className={cn(
@@ -270,7 +247,6 @@ export const SessionCard = memo(function SessionCard({
                     <div className="flex flex-wrap items-center gap-2">
                         <SessionChannelPicker
                             options={modelChannels}
-                            favoriteKeys={favoriteKeys}
                             currentKey={currentKey}
                             disabled={bindSession.isPending}
                             isSubmitting={bindSession.isPending}

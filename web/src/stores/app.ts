@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { LucideIcon } from 'lucide-react';
-import { Home, Radio, Sparkles, FolderTree, Settings, Logs } from 'lucide-react';
+import { Home, Radio, Sparkles, Settings, Logs } from 'lucide-react';
 
 // Page 表示应用支持的固定页面集合。
-export type Page = 'home' | 'channel' | 'group' | 'model' | 'log' | 'setting';
+export type Page = 'home' | 'channel' | 'model' | 'log' | 'setting';
 
 // NavItem 描述导航按钮使用的页面标识、文案和图标。
 type NavItem = { id: Page; label: string; icon: LucideIcon };
@@ -13,7 +13,6 @@ type NavItem = { id: Page; label: string; icon: LucideIcon };
 export const NAV_ITEMS: NavItem[] = [
     { id: 'home', label: 'Home', icon: Home },
     { id: 'channel', label: 'Channel', icon: Radio },
-    { id: 'group', label: 'Group', icon: FolderTree },
     { id: 'model', label: 'Model', icon: Sparkles },
     { id: 'log', label: 'Log', icon: Logs },
     { id: 'setting', label: 'Setting', icon: Settings },

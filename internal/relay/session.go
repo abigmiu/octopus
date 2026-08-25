@@ -47,14 +47,14 @@ const (
 
 // SessionState 是一个客户端会话的进程内状态, 同时作为会话流的消息形状。
 type SessionState struct {
-	ID          string        `json:"id"`           // 会话标识, 由客户端信号或请求内容派生。
-	Label       string        `json:"label"`        // 可读标签。
-	Client      string        `json:"client"`       // 客户端类型。
-	Group       string        `json:"group"`        // 该会话首次请求使用的分组名称。
-	Status      SessionStatus `json:"status"`       // 会话当前状态。
-	ChannelID   int           `json:"channel_id"`   // 已绑定的上游渠道 ID, 0 表示尚未绑定。
-	ChannelName string        `json:"channel_name"` // 已绑定渠道的名称。
-	ModelName   string        `json:"model_name"`   // 已绑定的上游模型名称。
+	ID             string        `json:"id"`              // 会话标识, 由客户端信号或请求内容派生。
+	Label          string        `json:"label"`           // 可读标签。
+	Client         string        `json:"client"`          // 客户端类型。
+	RequestedModel string        `json:"requested_model"` // 客户端最近一次请求的模型名称, 仅用于展示, 不参与选路。
+	Status         SessionStatus `json:"status"`          // 会话当前状态。
+	ChannelID      int           `json:"channel_id"`      // 已绑定的上游渠道 ID, 0 表示尚未绑定。
+	ChannelName    string        `json:"channel_name"`    // 已绑定渠道的名称。
+	ModelName      string        `json:"model_name"`      // 已绑定的上游模型名称。
 
 	StartedAt    time.Time `json:"started_at"`     // 会话首次出现时间。
 	LastActiveAt time.Time `json:"last_active_at"` // 会话最近一次请求时间。
@@ -80,7 +80,8 @@ var (
 )
 
 // legacyClaudeSessionPattern 匹配旧版 Claude Code 写在 metadata.user_id 末尾的会话标识。
-var legacyClaudeSessionPattern = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
+// 标识不限于十六进制: 不同版本可能写入任意非下划线字符组成的值。
+var legacyClaudeSessionPattern = regexp.MustCompile(`_session_([^_]+)$`)
 
 // sessionIdentity 是一次请求解析出的会话身份。
 type sessionIdentity struct {
@@ -168,7 +169,13 @@ func claudeMetadataSessionID(body []byte) string {
 		return ""
 	}
 	if strings.HasPrefix(userID, "{") {
-		return normalizeSessionID(gjson.Get(userID, "session_id").String())
+		// 不同版本分别使用下划线与驼峰命名。
+		for _, path := range []string{"session_id", "sessionId"} {
+			if id := normalizeSessionID(gjson.Get(userID, path).String()); id != "" {
+				return id
+			}
+		}
+		return ""
 	}
 	if matches := legacyClaudeSessionPattern.FindStringSubmatch(userID); len(matches) >= 2 {
 		return normalizeSessionID(matches[1])
@@ -178,9 +185,10 @@ func claudeMetadataSessionID(body []byte) string {
 
 // contentSessionID 由系统提示, 首条用户消息和首条助手消息派生会话标识。
 // 返回的主标识包含助手消息, 备用标识不包含: 会话首轮尚无助手消息, 由此让首轮与后续轮命中同一会话。
+// 必须取到真实的用户输入才派生标识: 仅凭系统提示无法区分会话, 各会话会折叠成同一个而错误地共用绑定。
 func contentSessionID(body []byte) (string, string) {
 	system, user, assistant := conversationHead(body)
-	if system == "" && user == "" {
+	if user == "" {
 		return "", ""
 	}
 	short := contentHash(system, user, "")
@@ -262,23 +270,23 @@ func conversationHead(body []byte) (string, string, string) {
 	return system, user, assistant
 }
 
-// messageText 取出一段消息内容中的文本, 兼容字符串, 分段数组和嵌套结构。
+// messageText 取出一段消息内容中的文本, 兼容字符串, 分段数组和嵌套结构; 客户端注入的上下文块会被剔除。
 func messageText(content gjson.Result) string {
 	switch {
 	case content.Type == gjson.String:
-		return strings.TrimSpace(content.String())
+		return cleanMessageText(content.String())
 	case content.IsArray():
 		texts := make([]string, 0, 4)
 		content.ForEach(func(_, part gjson.Result) bool {
 			if part.Type == gjson.String {
-				if text := strings.TrimSpace(part.String()); text != "" {
+				if text := cleanMessageText(part.String()); text != "" {
 					texts = append(texts, text)
 				}
 				return true
 			}
 			switch part.Get("type").String() {
 			case "text", "input_text", "output_text", "":
-				if text := strings.TrimSpace(part.Get("text").String()); text != "" {
+				if text := cleanMessageText(part.Get("text").String()); text != "" {
 					texts = append(texts, text)
 				}
 			}
@@ -286,7 +294,7 @@ func messageText(content gjson.Result) string {
 		})
 		return strings.Join(texts, " ")
 	case content.IsObject():
-		if text := strings.TrimSpace(content.Get("text").String()); text != "" {
+		if text := cleanMessageText(content.Get("text").String()); text != "" {
 			return text
 		}
 		if nested := content.Get("content"); nested.Exists() {
@@ -297,6 +305,43 @@ func messageText(content gjson.Result) string {
 		}
 	}
 	return ""
+}
+
+// injectedBlockTags 是客户端注入到用户消息中的上下文块标签。
+// 这类内容在每个新会话里完全相同, 既不能作为可读标签, 也不能参与会话标识的派生:
+// 否则全部新会话会折叠成同一个标识, 从而错误地共用上一个会话的绑定。
+var injectedBlockTags = []string{
+	"system-reminder",
+	"command-name",
+	"command-message",
+	"command-args",
+	"local-command-stdout",
+	"local-command-stderr",
+	"local-command-caveat",
+}
+
+// injectedBlockPattern 匹配上述全部注入块; RE2 不支持反向引用, 故按标签逐一列出完整配对。
+var injectedBlockPattern = regexp.MustCompile(func() string {
+	alternatives := make([]string, 0, len(injectedBlockTags))
+	for _, tag := range injectedBlockTags {
+		alternatives = append(alternatives, "<"+tag+">.*?</"+tag+">")
+	}
+	return "(?is)" + strings.Join(alternatives, "|")
+}())
+
+// cleanMessageText 剔除注入的上下文块并压缩空白, 得到用户实际输入的文本。
+func cleanMessageText(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	cleaned := injectedBlockPattern.ReplaceAllString(raw, " ")
+	// 未闭合的注入块同样不能留下, 例如被上游截断的提醒。
+	for _, tag := range injectedBlockTags {
+		if index := strings.Index(strings.ToLower(cleaned), "<"+tag+">"); index >= 0 {
+			cleaned = cleaned[:index]
+		}
+	}
+	return strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
 }
 
 // detectClient 按客户端请求头和正文特征识别客户端类型。
@@ -364,8 +409,8 @@ type sessionTarget struct {
 }
 
 // registerSessionRequest 将一次请求登记到其会话, 会话不存在时创建; 返回该会话已绑定的目标。
-// needsSelection 表示该请求所在分组是否处于会话模式: 只有会话模式的新会话才需要人工选择, 其余分组的会话仅用于日志分组。
-func registerSessionRequest(identity sessionIdentity, groupName string, requestID uint64, needsSelection bool) sessionTarget {
+// 新会话一律以待选状态出现: 每个会话都必须由人工选择一次渠道和模型, 请求在此之前不会发往上游。
+func registerSessionRequest(identity sessionIdentity, requestedModel string, requestID uint64) sessionTarget {
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
@@ -378,21 +423,17 @@ func registerSessionRequest(identity sessionIdentity, groupName string, requestI
 	}
 	now := time.Now()
 	if session == nil {
-		status := SessionStatusBound
-		if needsSelection {
-			status = SessionStatusPending
-		}
 		session = &SessionState{
 			ID:        identity.id,
 			Label:     identity.label,
 			Client:    identity.client,
-			Group:     groupName,
-			Status:    status,
+			Status:    SessionStatusPending,
 			StartedAt: now,
 			waiters:   make(map[chan struct{}]struct{}),
 		}
 		sessions[identity.id] = session
 	}
+	session.RequestedModel = requestedModel
 	session.LastActiveAt = now
 	session.RequestCount++
 	session.requestIDs = append(session.requestIDs, requestID)
@@ -404,27 +445,6 @@ func registerSessionRequest(identity sessionIdentity, groupName string, requestI
 	publishSessionLocked(session)
 	trimSessionsLocked()
 	return sessionTarget{channelID: session.ChannelID, modelName: session.ModelName}
-}
-
-// recordSessionTarget 记录非会话模式下本轮实际使用的目标, 使会话卡片也能显示当前渠道; 不改变绑定状态。
-func recordSessionTarget(sessionID, channelName, modelName string) {
-	if sessionID == "" {
-		return
-	}
-	sessionMu.Lock()
-	defer sessionMu.Unlock()
-
-	session := sessions[sessionID]
-	// 会话模式的目标由绑定给出, 不被逐轮结果改写。
-	if session == nil || session.ChannelID != 0 {
-		return
-	}
-	if session.ChannelName == channelName && session.ModelName == modelName {
-		return
-	}
-	session.ChannelName = channelName
-	session.ModelName = modelName
-	publishSessionLocked(session)
 }
 
 // awaitSessionTarget 阻塞等待会话绑定上游目标, 期间该会话在前端显示为待选。

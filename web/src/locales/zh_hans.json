@@ -35,13 +35,11 @@
         "expireAt": "过期时间",
         "neverExpire": "永不过期",
         "daysLeft": "天后到期",
-        "expired": "已过期",
-        "supportedModels": "支持的模型"
+        "expired": "已过期"
     },
     "navbar": {
         "home": "主页",
         "channel": "渠道",
-        "group": "分组",
         "model": "价格",
         "log": "日志",
         "setting": "设置"
@@ -61,11 +59,6 @@
                     "all": "全部渠道",
                     "enabled": "仅启用",
                     "disabled": "仅禁用"
-                },
-                "group": {
-                    "all": "全部分组",
-                    "withMembers": "有成员",
-                    "empty": "空分组"
                 },
                 "model": {
                     "all": "全部模型",
@@ -133,6 +126,26 @@
     "setting": {
         "appearance": "外观",
         "system": "系统",
+        "relay": {
+            "title": "转发",
+            "invalid": "请输入正整数",
+            "maxAttempts": {
+                "label": "总尝试次数",
+                "hint": "单个渠道包含首次请求的总尝试次数"
+            },
+            "retryInterval": {
+                "label": "重试间隔（秒）",
+                "hint": "同一渠道相邻两次尝试的等待时间"
+            },
+            "responseTimeout": {
+                "label": "响应超时（秒）",
+                "hint": "等待完整非流式响应的最长时间"
+            },
+            "streamFirstEventTimeout": {
+                "label": "流式首事件超时（秒）",
+                "hint": "等待首个有效流事件的最长时间"
+            }
+        },
         "theme": {
             "label": "主题",
             "light": "浅色",
@@ -191,9 +204,6 @@
                 "expireAt": "过期日期",
                 "selectDate": "选择日期",
                 "neverExpire": "永不过期",
-                "supportedModels": "支持的模型",
-                "noModels": "暂无可选模型",
-                "modelsHint": "不选择则为无限制",
                 "enabled": "是否启用",
                 "cancel": "取消",
                 "create": "创建",
@@ -323,62 +333,6 @@
             "unsupported": "当前浏览器不支持通知"
         }
     },
-    "group": {
-        "toast": {
-            "createFailed": "创建失败",
-            "updated": "更新成功",
-            "updateFailed": "更新失败",
-            "deleted": "删除成功"
-        },
-        "create": {
-            "title": "创建分组",
-            "submit": "创建",
-            "submitting": "创建中..."
-        },
-        "card": {
-            "empty": "暂无规则",
-            "activate": "设为活动项",
-            "cooling": "冷却 {seconds}s",
-            "affinity": "亲和 {seconds}s"
-        },
-        "detail": {
-            "actions": {
-                "edit": "编辑",
-                "cancel": "取消",
-                "save": "保存",
-                "copyName": "复制名称",
-                "delete": "删除",
-                "confirmDelete": "确认删除"
-            }
-        },
-        "form": {
-            "name": "分组名称",
-            "mode": "路由模式",
-            "modeHint": "手动固定选中成员；故障转移按成员顺序并在失败时切换；按会话手动为每个新会话单独选择渠道",
-            "manual": "手动",
-            "failover": "故障转移",
-            "members": "成员",
-            "relay": "路由策略",
-            "retryCount": "总尝试次数",
-            "retryCountHint": "单个成员包含首次请求的总尝试次数",
-            "retryInterval": "重试间隔（秒）",
-            "retryIntervalHint": "同一成员相邻两次尝试的等待时间",
-            "nonStreamTimeout": "非流式超时（秒）",
-            "nonStreamTimeoutHint": "等待完整非流式响应的最长时间",
-            "streamTimeout": "流式首事件超时（秒）",
-            "streamTimeoutHint": "等待首个有效流事件的最长时间",
-            "cooldown": "冷却时间（秒）",
-            "cooldownHint": "成员重试耗尽后暂停使用的时间",
-            "affinity": "故障切换亲和时间（秒）",
-            "affinityHint": "备用成员首次请求成功后继续使用该成员的时间",
-            "items": "成员顺序",
-            "addItem": "添加模型",
-            "autoAdd": "自动添加",
-            "clear": "清空",
-            "session": "按会话手动",
-            "sessionHint": "每个新会话都需要在日志页手动选择渠道和模型后才会继续"
-        }
-    },
     "model": {
         "create": {
             "title": "创建模型",
@@ -426,11 +380,7 @@
             "unknownModel": "未知模型",
             "detailUnavailable": "正文内容不可用",
             "requestContent": "请求体",
-            "group": "分组",
-            "groupUnavailable": "当前请求模型没有对应分组",
-            "noGroupItems": "当前分组没有可用渠道",
             "channelChanged": "渠道已切换",
-            "channelCleared": "已取消渠道选择",
             "channelChangeFailed": "渠道切换失败",
             "responseContent": "响应内容",
             "noRequestContent": "(无请求内容)",
@@ -444,11 +394,10 @@
             "waitingResponse": "正在等待上游响应",
             "responseStreaming": "上游已响应，流式传输正在进行",
             "cancelReason": "取消原因",
-            "cancelReasonWith": "已取消：{reason}",
-            "sessionUnavailable": "该请求没有关联会话"
+            "cancelReasonWith": "已取消：{reason}"
         },
         "session": {
-            "ungrouped": "未分组请求",
+            "ungrouped": "未归属会话的请求",
             "status": {
                 "pending": "等待选择",
                 "bound": "已绑定",
@@ -462,7 +411,6 @@
             },
             "searchPlaceholder": "搜索渠道或模型",
             "noCandidates": "没有匹配的渠道",
-            "favorite": "常用",
             "unboundChannel": "选择渠道",
             "unboundModel": "选择模型",
             "unbind": "解除绑定",

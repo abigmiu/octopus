@@ -177,20 +177,18 @@ http://localhost:3000
 <tr>
 <td align="center"><b>首页</b></td>
 <td align="center"><b>渠道</b></td>
-<td align="center"><b>分组</b></td>
+<td align="center"><b>价格</b></td>
 </tr>
 <tr>
 <td><img src="web/public/screenshot/desktop-home.png" alt="首页" width="400"></td>
 <td><img src="web/public/screenshot/desktop-channel.png" alt="渠道" width="400"></td>
-<td><img src="web/public/screenshot/desktop-group.png" alt="分组" width="400"></td>
+<td><img src="web/public/screenshot/desktop-price.png" alt="价格" width="400"></td>
 </tr>
 <tr>
-<td align="center"><b>价格</b></td>
 <td align="center"><b>日志</b></td>
 <td align="center"><b>设置</b></td>
 </tr>
 <tr>
-<td><img src="web/public/screenshot/desktop-price.png" alt="价格" width="400"></td>
 <td><img src="web/public/screenshot/desktop-log.png" alt="日志" width="400"></td>
 <td><img src="web/public/screenshot/desktop-setting.png" alt="设置" width="400"></td>
 </tr>
@@ -204,18 +202,16 @@ http://localhost:3000
 <tr>
 <td align="center"><b>首页</b></td>
 <td align="center"><b>渠道</b></td>
-<td align="center"><b>分组</b></td>
 <td align="center"><b>价格</b></td>
 <td align="center"><b>日志</b></td>
 <td align="center"><b>设置</b></td>
 </tr>
 <tr>
-<td><img src="web/public/screenshot/mobile-home.png" alt="移动端首页" width="140"></td>
-<td><img src="web/public/screenshot/mobile-channel.png" alt="移动端渠道" width="140"></td>
-<td><img src="web/public/screenshot/mobile-group.png" alt="移动端分组" width="140"></td>
-<td><img src="web/public/screenshot/mobile-price.png" alt="移动端价格" width="140"></td>
-<td><img src="web/public/screenshot/mobile-log.png" alt="移动端日志" width="140"></td>
-<td><img src="web/public/screenshot/mobile-setting.png" alt="移动端设置" width="140"></td>
+<td><img src="web/public/screenshot/mobile-home.png" alt="首页" width="140"></td>
+<td><img src="web/public/screenshot/mobile-channel.png" alt="渠道" width="140"></td>
+<td><img src="web/public/screenshot/mobile-price.png" alt="价格" width="140"></td>
+<td><img src="web/public/screenshot/mobile-log.png" alt="日志" width="140"></td>
+<td><img src="web/public/screenshot/mobile-setting.png" alt="设置" width="140"></td>
 </tr>
 </table>
 </div>
@@ -240,18 +236,27 @@ http://localhost:3000
 
 > 💡 **提示**：填写 Base URL 时无需包含具体的 API 端点路径，程序会自动处理。
 
+**请求头转发：**
+
+- **同协议直通**（客户端协议与渠道协议一致）时，客户端请求头**原样转发**给上游，因此依赖客户端身份校验的中转服务可以正常使用
+- **跨协议转换**时，不属于目标协议的客户端专属请求头会被自动剔除（如把 Anthropic 请求转发到 OpenAI 渠道时的 `anthropic-*`），避免上游因无法识别的请求头报错
+- 渠道配置里的 **不转发请求头** 可以额外指定要剔除的请求头（逗号分隔），用于自动规则覆盖不到的情况；同名的自定义请求头仍然生效
+
 ---
 
-### 📁 分组管理
+### 💬 会话管理
 
-分组用于将多个渠道聚合为一个统一的对外模型名称。
+每个新会话都需要人工选择一次上游渠道和模型，选定后该会话的后续请求全部沿用该选择。
 
 **核心概念：**
 
-- **分组名称** 即程序对外暴露的模型名称
-- 调用 API 时，将请求中的 `model` 参数设置为分组名称即可
+- **会话** 由客户端请求自动识别：优先使用客户端携带的会话标识（Claude Code、Codex 等），没有时由系统提示与首条用户消息派生稳定标识
+- **请求中的 `model` 参数不参与选路**，仅作为日志展示；实际使用的渠道和模型由你在日志页为该会话选择
+- 新会话的请求会一直等待，直到你在日志页完成选择；等待超过 60 秒该请求失败，但待选状态会继续保留 5 分钟，此时完成选择，客户端重试即可立即命中
+- 已绑定的渠道请求失败时**不会自动切换**，按全局转发配置重试同一渠道，耗尽后请求失败并保留绑定，等待你手动更换
+- 会话与绑定都保存在内存中，**重启后需要重新选择**；进程内最多保留 20 个会话
 
-> 💡 **示例**：创建分组名称为 `gpt-4o`，将多个供应商的 GPT-4o 渠道加入该分组，即可通过统一的 `model: gpt-4o` 访问所有渠道。
+> 💡 **提示**：新会话进入等待时可通过浏览器通知提醒，在设置页开启。
 
 ---
 
@@ -289,7 +294,18 @@ http://localhost:3000
 
 > ⚠️ **重要提示**：退出程序时，请使用正常的关闭方式（如 `Ctrl+C` 或发送 `SIGTERM` 信号），以确保内存中的统计数据能正确写入数据库。**请勿使用 `kill -9` 等强制终止方式**，否则可能导致统计数据丢失。
 
+**转发配置：**
 
+已绑定渠道的请求失败时如何重试，以及等待上游响应的时限。全部为全局配置。
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| 单渠道总尝试次数 | 包含首次请求；耗尽后请求失败并保留绑定 | `2` |
+| 重试间隔（秒） | 同一渠道相邻两次尝试之间的等待时间 | `3` |
+| 非流式响应超时（秒） | 等待完整非流式响应的时限 | `120` |
+| 流式首帧超时（秒） | 等待首个有效流事件的时限；取得首帧后后续事件不再受限 | `30` |
+
+> 💡 **提示**：超时后请求以明确的超时原因失败，而不是挂到客户端自己放弃。
 
 
 ## 🔌 客户端接入
@@ -305,7 +321,7 @@ client = OpenAI(
     api_key="sk-octopus-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg", 
 )
 completion = client.chat.completions.create(
-    model="octopus-openai",  // 填写正确的分组名称
+    model="octopus-openai",  // 任意值即可，实际选路由会话选择决定
     messages = [
         {"role": "user", "content": "Hello"},
     ],

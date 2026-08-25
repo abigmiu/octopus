@@ -92,7 +92,6 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		updates.MatchRegex = req.MatchRegex
 	}
 
-	var modelNames []string
 	if req.Model != nil || req.CustomModel != nil {
 		models := oldChannel.Model
 		customModels := oldChannel.CustomModel
@@ -105,6 +104,7 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 			updates.CustomModel = customModels
 		}
 
+		// 同名模型同时出现在自动同步与自定义列表时只保留自定义的那一份。
 		customModelNames := xstrings.SplitCompact(",", customModels)
 		customModelSet := make(map[string]struct{}, len(customModelNames))
 		for _, modelName := range customModelNames {
@@ -119,22 +119,13 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		}
 		selectFields = append(selectFields, "model")
 		updates.Model = strings.Join(filteredAutoModels, ",")
-		modelNames = append(filteredAutoModels, customModelNames...)
 	}
 
-	var groupIDs, itemIDs []int
 	var channel model.Channel
 	if err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if len(selectFields) > 0 {
 			if err := tx.Model(&model.Channel{}).Where("id = ?", req.ID).Select(selectFields).Updates(&updates).Error; err != nil {
 				return fmt.Errorf("failed to update channel: %w", err)
-			}
-		}
-		if req.Model != nil || req.CustomModel != nil {
-			var err error
-			groupIDs, itemIDs, err = groupItemCleanupByChannel(tx, req.ID, modelNames)
-			if err != nil {
-				return err
 			}
 		}
 		if err := tx.First(&channel, req.ID).Error; err != nil {
@@ -145,8 +136,6 @@ func ChannelUpdate(req *model.ChannelUpdateRequest, ctx context.Context) (*model
 		return nil, err
 	}
 
-	// 先移除分组缓存中的失效成员，再暴露渠道的新模型配置。
-	groupItemCleanupCache(groupIDs, itemIDs)
 	channelCache.Set(channel.ID, channel)
 	return &channel, nil
 }
@@ -165,20 +154,14 @@ func ChannelEnabled(id int, enabled bool, ctx context.Context) error {
 	return nil
 }
 
-// ChannelDel 删除渠道、关联分组项及其统计数据。
+// ChannelDel 删除渠道及其统计数据。
 func ChannelDel(id int, ctx context.Context) error {
 	_, ok := channelCache.Get(id)
 	if !ok {
 		return fmt.Errorf("channel not found")
 	}
 
-	var groupIDs, itemIDs []int
 	err := db.GetDB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var err error
-		groupIDs, itemIDs, err = groupItemCleanupByChannel(tx, id, nil)
-		if err != nil {
-			return err
-		}
 		// 删除统计数据
 		if err := tx.Where("channel_id = ?", id).Delete(&model.StatsChannel{}).Error; err != nil {
 			return fmt.Errorf("failed to delete channel stats: %w", err)
@@ -198,7 +181,6 @@ func ChannelDel(id int, ctx context.Context) error {
 		return err
 	}
 
-	groupItemCleanupCache(groupIDs, itemIDs)
 	// 删除缓存
 	channelCache.Del(id)
 	statsChannelCacheNeedUpdateLock.Lock()

@@ -176,20 +176,18 @@ All configuration options can be overridden via environment variables using the 
 <tr>
 <td align="center"><b>Dashboard</b></td>
 <td align="center"><b>Channel Management</b></td>
-<td align="center"><b>Group Management</b></td>
+<td align="center"><b>Price Management</b></td>
 </tr>
 <tr>
 <td><img src="web/public/screenshot/desktop-home.png" alt="Dashboard" width="400"></td>
-<td><img src="web/public/screenshot/desktop-channel.png" alt="Channel" width="400"></td>
-<td><img src="web/public/screenshot/desktop-group.png" alt="Group" width="400"></td>
+<td><img src="web/public/screenshot/desktop-channel.png" alt="Channel Management" width="400"></td>
+<td><img src="web/public/screenshot/desktop-price.png" alt="Price Management" width="400"></td>
 </tr>
 <tr>
-<td align="center"><b>Price Management</b></td>
 <td align="center"><b>Logs</b></td>
 <td align="center"><b>Settings</b></td>
 </tr>
 <tr>
-<td><img src="web/public/screenshot/desktop-price.png" alt="Price Management" width="400"></td>
 <td><img src="web/public/screenshot/desktop-log.png" alt="Logs" width="400"></td>
 <td><img src="web/public/screenshot/desktop-setting.png" alt="Settings" width="400"></td>
 </tr>
@@ -203,18 +201,16 @@ All configuration options can be overridden via environment variables using the 
 <tr>
 <td align="center"><b>Home</b></td>
 <td align="center"><b>Channel</b></td>
-<td align="center"><b>Group</b></td>
 <td align="center"><b>Price</b></td>
 <td align="center"><b>Logs</b></td>
 <td align="center"><b>Settings</b></td>
 </tr>
 <tr>
-<td><img src="web/public/screenshot/mobile-home.png" alt="Mobile Home" width="140"></td>
-<td><img src="web/public/screenshot/mobile-channel.png" alt="Mobile Channel" width="140"></td>
-<td><img src="web/public/screenshot/mobile-group.png" alt="Mobile Group" width="140"></td>
-<td><img src="web/public/screenshot/mobile-price.png" alt="Mobile Price" width="140"></td>
-<td><img src="web/public/screenshot/mobile-log.png" alt="Mobile Logs" width="140"></td>
-<td><img src="web/public/screenshot/mobile-setting.png" alt="Mobile Settings" width="140"></td>
+<td><img src="web/public/screenshot/mobile-home.png" alt="Home" width="140"></td>
+<td><img src="web/public/screenshot/mobile-channel.png" alt="Channel" width="140"></td>
+<td><img src="web/public/screenshot/mobile-price.png" alt="Price" width="140"></td>
+<td><img src="web/public/screenshot/mobile-log.png" alt="Logs" width="140"></td>
+<td><img src="web/public/screenshot/mobile-setting.png" alt="Settings" width="140"></td>
 </tr>
 </table>
 </div>
@@ -239,18 +235,27 @@ The program automatically appends API paths based on channel type. You only need
 
 > 💡 **Tip**: No need to include specific API endpoint paths in the Base URL - the program handles this automatically.
 
+**Header Forwarding:**
+
+- On **same-protocol passthrough** (client protocol matches the channel protocol), client headers are forwarded **as-is**, so relays that validate the calling client keep working
+- On **cross-protocol conversion**, client headers that belong to another protocol are stripped automatically (e.g. `anthropic-*` when an Anthropic request goes to an OpenAI channel), so the upstream does not reject unknown headers
+- A channel's **header blocklist** (comma separated) removes additional headers for cases the automatic rules miss; custom headers with the same name still apply
+
 ---
 
-### 📁 Group Management
+### 💬 Session Management
 
-Groups aggregate multiple channels into a unified external model name.
+Every new session requires you to pick an upstream channel and model once; all subsequent requests in that session reuse the selection.
 
 **Core Concepts:**
 
-- **Group name** is the model name exposed by the program
-- When calling the API, set the `model` parameter to the group name
+- **Sessions** are detected automatically: explicit client session identifiers (Claude Code, Codex, etc.) take priority, otherwise a stable identifier is derived from the system prompt and the first user message
+- **The `model` parameter in the request does not affect routing** — it is only shown in the logs. The channel and model actually used come from the selection you make on the log page
+- Requests from a new session wait until you make that selection. A request that waits more than 60 seconds fails, but the pending entry is kept for another 5 minutes, so selecting afterwards lets a client retry succeed immediately
+- When a bound channel fails there is **no automatic failover**: the same channel is retried according to the global relay settings, then the request fails while the binding is kept for you to change manually
+- Sessions and bindings live in memory only, so **a restart requires selecting again**. At most 20 sessions are retained in the process
 
-> 💡 **Example**: Create a group named `gpt-4o`, add multiple providers' GPT-4o channels to it, then access all channels via a unified `model: gpt-4o`.
+> 💡 **Tip**: Enable browser notifications in Settings to be alerted when a new session starts waiting.
 
 ---
 
@@ -288,6 +293,19 @@ Since the program handles numerous statistics, writing to the database on every 
 
 > ⚠️ **Important**: When exiting the program, use proper shutdown methods (like `Ctrl+C` or sending `SIGTERM` signal) to ensure in-memory statistics are correctly written to the database. **Do NOT use `kill -9` or other forced termination methods**, as this may result in statistics data loss.
 
+**Relay Settings:**
+
+How a bound channel is retried when a request fails, and how long to wait for the upstream response. All values are global.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| Attempts per channel | Includes the first request; when exhausted the request fails and the binding is kept | `2` |
+| Retry interval (s) | Wait between two consecutive attempts on the same channel | `3` |
+| Non-stream response timeout (s) | Deadline for a complete non-streaming response | `120` |
+| Stream first event timeout (s) | Deadline for the first valid stream event; later events are not limited | `30` |
+
+> 💡 **Tip**: On timeout the request fails with an explicit timeout reason instead of hanging until the client gives up.
+
 ---
 
 ## 🔌 Client Integration
@@ -303,7 +321,7 @@ client = OpenAI(
     api_key="sk-octopus-P48ROljwJmWBYVARjwQM8Nkiezlg7WOrXXOWDYY8TI5p9Mzg", 
 )
 completion = client.chat.completions.create(
-    model="octopus-openai",  # Use the correct group name
+    model="octopus-openai",  # Any value; routing comes from the session selection
     messages = [
         {"role": "user", "content": "Hello"},
     ],

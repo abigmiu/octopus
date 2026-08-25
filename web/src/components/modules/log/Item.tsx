@@ -6,17 +6,12 @@ import { githubDarkTheme } from '@uiw/react-json-view/githubDark';
 import { githubLightTheme } from '@uiw/react-json-view/githubLight';
 import { useTheme } from '@/provider/theme';
 import { type RelayLogOverview, useLogRequestBody, useLogResponseBody, useStopRound } from '@/api/log';
-import { useGroupList, useUpdateGroupActiveItem } from '@/api/group';
-import { useModelChannelList } from '@/api/model';
-import { useBindSession, useSessions } from '@/api/session';
+import { useSessions } from '@/api/session';
 import { getModelIcon } from '@/lib/model-icons';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { CopyIconButton } from '@/components/common/CopyButton';
 import { toast } from 'sonner';
-import { buildChannelNameByModelKey, modelChannelKey } from '@/components/modules/group/utils';
-import { MemberStatus } from '@/components/modules/group/MemberStatus';
 import {
     MorphingDialog,
     MorphingDialogTrigger,
@@ -124,18 +119,11 @@ function JsonContent({ content, fallbackText }: { content: string | object | und
 function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
     const t = useTranslations('log.card');
     const statusT = useTranslations('log.status');
-    const [leftTab, setLeftTab] = useState<'request' | 'group'>('group');
     const [detailReady, setDetailReady] = useState(false); // 展开动画结束后才允许加载详情数据。
-    const [switchingItemId, setSwitchingItemId] = useState<number | null>(null);
-    const requestBody = useLogRequestBody(log.id, log.started_at, detailReady && leftTab === 'request');
+    const requestBody = useLogRequestBody(log.id, log.started_at, detailReady);
     const responseBody = useLogResponseBody(log.id, log.started_at, detailReady && log.status === 'success');
-    const { data: groups = [] } = useGroupList(detailReady, detailReady);
-    const { data: modelChannels = [] } = useModelChannelList(detailReady);
     const { sessions } = useSessions();
-    const updateActiveItem = useUpdateGroupActiveItem();
     const stopRound = useStopRound();
-    const bindSession = useBindSession();
-    const channelNameByKey = useMemo(() => buildChannelNameByModelKey(modelChannels), [modelChannels]);
     const actualModel = log.target_model || log.model;
     const { Icon, className: iconClassName, color: brandColor } = getModelIcon(actualModel);
     const errorText = log.error ?? '';
@@ -145,19 +133,9 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
     const rounds = log.rounds ?? [];
     const orderedRounds = useMemo(() => [...(log.rounds ?? [])].sort((a, b) => b.round - a.round), [log.rounds]); // 最新一轮排在最前。
     const showRounds = log.status === 'running' || (requestFailed && rounds.length > 0);
-    const activeGroup = groups.find((group) => group.name === log.model);
-    const isSessionMode = activeGroup?.mode === 'session'; // session 模式下按会话绑定渠道, 不再切换分组当前项。
-    const isManualMode = activeGroup?.mode === 'manual';
     const session = log.session_id ? sessions.find((item) => item.id === log.session_id) : undefined;
-    const sessionMemberKey = session && session.channel_id !== 0
-        ? modelChannelKey(session.channel_id, session.model_name)
-        : '';
-    // isWaitingForSelection 表示请求正等待管理员选择渠道。
-    const isWaitingForSelection = log.status === 'running' && !log.sending && (
-        (isManualMode && activeGroup?.active_item_id === 0)
-        || (isSessionMode && session?.status === 'pending')
-    );
-    const canSelectItem = isManualMode || isSessionMode;
+    // isWaitingForSelection 表示请求正等待管理员为该会话选择渠道。
+    const isWaitingForSelection = log.status === 'running' && !log.sending && session?.status === 'pending';
 
     // 让弹窗先完成展开动画, 避免详情请求及其状态更新占用动画起步帧。
     useEffect(() => {
@@ -187,108 +165,28 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
             <MorphingDialogDescription className="flex-1 min-h-0">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full min-h-0">
                     <div className="flex flex-col rounded-2xl border border-border bg-muted/30 overflow-hidden min-h-0">
-                        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-muted/50 pl-1 pr-3 md:pr-4">
-                            <Tabs value={leftTab} onValueChange={(value) => setLeftTab(value as 'request' | 'group')}>
-                                <TabsList variant="text" className="p-0">
-                                    <TabsTrigger value="group" className="pr-0">
-                                        {t('group')}
-                                    </TabsTrigger>
-                                    <span aria-hidden="true" className="mx-1 inline-flex h-full -translate-y-px items-center text-sm font-medium leading-none text-muted-foreground/50">/</span>
-                                    <TabsTrigger value="request" className="pl-0">
-                                        {t('requestContent')}
-                                    </TabsTrigger>
-                                </TabsList>
-                            </Tabs>
-                            {leftTab === 'request' && (
-                                <Badge variant="secondary" className="ml-auto text-xs">
-                                    {(log.usage.prompt_tokens - (log.usage.prompt_tokens_details?.cached_tokens ?? 0)).toLocaleString()} {t('tokens')}
-                                </Badge>
-                            )}
+                        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-muted/50 px-3 md:px-4">
+                            <span className="text-sm font-medium text-card-foreground">{t('requestContent')}</span>
+                            <Badge variant="secondary" className="ml-auto text-xs">
+                                {(log.usage.prompt_tokens - (log.usage.prompt_tokens_details?.cached_tokens ?? 0)).toLocaleString()} {t('tokens')}
+                            </Badge>
                         </div>
                         <div className="flex-1 overflow-auto min-h-0">
                             {!detailReady ? (
                                 <div className="flex h-full items-center justify-center">
                                     <Loader2 className="size-5 animate-spin text-muted-foreground" />
                                 </div>
-                            ) : leftTab === 'request' ? (
-                                requestBody.isLoading ? (
-                                    <div className="flex h-full items-center justify-center">
-                                        <Loader2 className="size-5 animate-spin text-muted-foreground" />
-                                    </div>
-                                ) : requestBody.error ? (
-                                    <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-xs text-destructive">
-                                        <AlertCircle className="size-5" />
-                                        <span>{t('detailUnavailable')}</span>
-                                    </div>
-                                ) : (
-                                    <JsonContent content={requestBody.data} fallbackText={t('noRequestContent')} />
-                                )
-                            ) : !activeGroup ? (
-                                <div className="flex h-full items-center justify-center px-4 text-xs text-muted-foreground">
-                                    {t('groupUnavailable')}
+                            ) : requestBody.isLoading ? (
+                                <div className="flex h-full items-center justify-center">
+                                    <Loader2 className="size-5 animate-spin text-muted-foreground" />
                                 </div>
-                            ) : !activeGroup.items?.length ? (
-                                <div className="flex h-full items-center justify-center px-4 text-xs text-muted-foreground">
-                                    {t('noGroupItems')}
+                            ) : requestBody.error ? (
+                                <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-xs text-destructive">
+                                    <AlertCircle className="size-5" />
+                                    <span>{t('detailUnavailable')}</span>
                                 </div>
                             ) : (
-                                <div className="divide-y divide-border">
-                                    {activeGroup.items.map((item) => {
-                                        const { Icon: ItemIcon, className: itemIconClassName } = getModelIcon(item.model_name);
-                                        const itemKey = modelChannelKey(item.channel_id, item.model_name);
-                                        const itemActive = isSessionMode
-                                            ? itemKey === sessionMemberKey
-                                            : item.id === activeGroup.active_item_id;
-                                        const itemSwitching = item.id === switchingItemId;
-                                        const itemCurrent = switchingItemId !== null
-                                            ? itemSwitching
-                                            : activeGroup.mode === 'failover'
-                                                ? activeGroup.runtime?.current_item_id === item.id
-                                                : itemActive;
-                                        return (
-                                            <button
-                                                key={item.id ?? itemKey}
-                                                type="button"
-                                                aria-pressed={itemCurrent}
-                                                disabled={item.id === undefined || !canSelectItem || switchingItemId !== null || stopRound.isPending || bindSession.isPending}
-                                                onClick={async () => {
-                                                    if (item.id === undefined || !canSelectItem) return;
-                                                    setSwitchingItemId(item.id);
-                                                    try {
-                                                        if (isSessionMode) {
-                                                            // session 模式下后端会自动中止当前轮次, 因此不需要额外调用停止。
-                                                            if (!log.session_id) throw new Error(t('sessionUnavailable'));
-                                                            await bindSession.mutateAsync({ sessionId: log.session_id, channelId: item.channel_id, modelName: item.model_name });
-                                                            toast.success(t('channelChanged'));
-                                                        } else {
-                                                            if (!activeGroup.id) return;
-                                                            await updateActiveItem.mutateAsync({ groupId: activeGroup.id, itemId: itemActive ? 0 : item.id });
-                                                            if (log.sending) {
-                                                                await stopRound.mutateAsync({ requestId: log.id, round: log.round });
-                                                            }
-                                                            toast.success(itemActive ? t('channelCleared') : t('channelChanged'));
-                                                        }
-                                                    } catch (cause) {
-                                                        toast.error(t('channelChangeFailed'), { description: cause instanceof Error ? cause.message : undefined });
-                                                    } finally {
-                                                        setSwitchingItemId(null);
-                                                    }
-                                                }}
-                                                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs transition-colors hover:bg-muted/50 disabled:cursor-default disabled:hover:bg-transparent"
-                                            >
-                                                <ItemIcon aria-hidden="true" className={itemIconClassName} width={20} height={20} />
-                                                <span className="min-w-0 flex-1">
-                                                    <span className="block truncate font-semibold text-foreground">
-                                                        {channelNameByKey.get(itemKey) ?? `#${item.channel_id}`}
-                                                    </span>
-                                                    <span className="block truncate text-[11px] text-muted-foreground">{item.model_name}</span>
-                                                </span>
-                                                <MemberStatus group={activeGroup} itemId={item.id} now={now} active={itemCurrent} />
-                                                {itemSwitching && <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
+                                <JsonContent content={requestBody.data} fallbackText={t('noRequestContent')} />
                             )}
                         </div>
                     </div>
@@ -298,7 +196,7 @@ function LogDetail({ log, now }: { log: RelayLogOverview; now: number }) {
                             <span className="text-sm font-medium text-card-foreground">
                                 {isWaitingForSelection ? t('waitingChannelSelection') : showRounds ? t('retryDetails') : requestFailed ? t('errorInfo') : t('responseContent')}
                             </span>
-                            {log.status === 'running' && log.sending && isManualMode ? (
+                            {log.status === 'running' && log.sending ? (
                                 <button
                                     type="button"
                                     disabled={stopRound.isPending}

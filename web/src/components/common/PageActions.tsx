@@ -20,11 +20,10 @@ interface PageActionOption {
     icon?: LucideIcon; // 操作选项左侧的可选图标。
 }
 
-type PageActionPage = 'channel' | 'group' | 'model';
+type PageActionPage = 'channel' | 'model';
 type PageActionLayout = 'grid' | 'list';
 type PageActionSortOrder = 'asc' | 'desc';
 type ChannelFilter = 'all' | 'enabled' | 'disabled';
-type GroupFilter = 'all' | 'with-members' | 'empty';
 type ModelFilter = 'all' | 'priced' | 'free';
 
 interface PageActionsState {
@@ -32,13 +31,11 @@ interface PageActionsState {
     layouts: Partial<Record<PageActionPage, PageActionLayout>>; // 各列表页面选中的布局。
     sortOrders: Partial<Record<PageActionPage, PageActionSortOrder>>; // 各列表页面的排序方向。
     channelFilter: ChannelFilter; // 渠道页面的筛选条件。
-    groupFilter: GroupFilter; // 分组页面的筛选条件。
     modelFilter: ModelFilter; // 模型页面的筛选条件。
     setSearchTerm: (page: PageActionPage, value: string) => void; // 更新指定页面的搜索内容。
     setLayout: (page: PageActionPage, value: PageActionLayout) => void; // 更新指定页面的布局。
     setSort: (page: PageActionPage, order: PageActionSortOrder) => void; // 更新指定页面的排序方向。
     setChannelFilter: (value: ChannelFilter) => void; // 更新渠道筛选条件。
-    setGroupFilter: (value: GroupFilter) => void; // 更新分组筛选条件。
     setModelFilter: (value: ModelFilter) => void; // 更新模型筛选条件。
 }
 
@@ -50,7 +47,6 @@ export const usePageActionsStore = create<PageActionsState>()(
             layouts: {},
             sortOrders: {},
             channelFilter: 'all',
-            groupFilter: 'all',
             modelFilter: 'all',
             setSearchTerm: (page, value) => set((state) => ({
                 searchTerms: { ...state.searchTerms, [page]: value },
@@ -62,7 +58,6 @@ export const usePageActionsStore = create<PageActionsState>()(
                 sortOrders: { ...state.sortOrders, [page]: order },
             })),
             setChannelFilter: (value) => set({ channelFilter: value }),
-            setGroupFilter: (value) => set({ groupFilter: value }),
             setModelFilter: (value) => set({ modelFilter: value }),
         }),
         {
@@ -71,7 +66,6 @@ export const usePageActionsStore = create<PageActionsState>()(
                 layouts: state.layouts,
                 sortOrders: state.sortOrders,
                 channelFilter: state.channelFilter,
-                groupFilter: state.groupFilter,
                 modelFilter: state.modelFilter,
             }),
         }

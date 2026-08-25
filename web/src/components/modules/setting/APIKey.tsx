@@ -6,7 +6,6 @@ import { Input } from '@/components/ui/input';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
-import { Badge } from '@/components/ui/badge';
 import {
     MorphingDialog,
     MorphingDialogContainer,
@@ -21,7 +20,6 @@ import {
     useDeleteAPIKey,
     type APIKey,
 } from '@/api/apikey';
-import { useGroupList } from '@/api/group';
 import { useStatsAPIKey } from '@/api/stats';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -56,18 +54,6 @@ function normalizeMoneyInput(input: string): string {
     return rest.length > 0 ? `${intPart}.${rest.join('').slice(0, 6)}` : intPart;
 }
 
-function toggleModel(current: string | undefined, model: string): string | undefined {
-    const models = current ? current.split(',').filter(Boolean) : [];
-    const next = models.includes(model)
-        ? models.filter((m) => m !== model)
-        : [...models, model];
-    return next.length ? next.join(',') : undefined;
-}
-
-function hasModel(supported: string | undefined, model: string): boolean {
-    return supported ? supported.split(',').includes(model) : false;
-}
-
 interface APIKeyFormProps {
     apiKey?: APIKey;
     isPending: boolean;
@@ -78,14 +64,11 @@ interface APIKeyFormProps {
 
 function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKeyFormProps) {
     const t = useTranslations('setting');
-    const { data: groups = [] } = useGroupList();
-
     const [form, setForm] = useState<Omit<APIKey, 'id' | 'api_key'>>(() => ({
         name: apiKey?.name ?? '',
         enabled: apiKey?.enabled ?? true,
         expire_at: apiKey?.expire_at,
         max_cost: apiKey?.max_cost,
-        supported_models: apiKey?.supported_models,
     }));
     const [maxCostInput, setMaxCostInput] = useState(() =>
         apiKey?.max_cost != null ? String(apiKey.max_cost) : ''
@@ -100,11 +83,6 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
         return '00:00';
     });
     const [expireOpen, setExpireOpen] = useState(false);
-
-    const availableModels = useMemo(() => {
-        const names = groups.map((g) => g.name).filter(Boolean);
-        return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
-    }, [groups]);
 
     const expireDate = parseExpireDate(form.expire_at);
     const neverExpire = !form.expire_at;
@@ -270,43 +248,6 @@ function APIKeyForm({ apiKey, isPending, submitLabel, onSubmit, onClose }: APIKe
                         {t('apiKey.form.neverExpire')}
                     </button>
                 </div>
-            </div>
-
-            <div className="grid gap-1">
-                <div className="text-xs text-muted-foreground">{t('apiKey.form.supportedModels')}</div>
-                <div className="max-h-40 overflow-auto rounded-xl p-2">
-                    {availableModels.length === 0 ? (
-                        <div className="text-xs text-muted-foreground py-2 text-center">
-                            {t('apiKey.form.noModels')}
-                        </div>
-                    ) : (
-                        <div className="flex flex-wrap gap-2">
-                            {availableModels.map((m) => {
-                                const checked = hasModel(form.supported_models, m);
-                                return (
-                                    <button
-                                        key={m}
-                                        type="button"
-                                        disabled={isPending}
-                                        onClick={() => updateForm({ supported_models: toggleModel(form.supported_models, m) })}
-                                        className="text-left disabled:opacity-50"
-                                    >
-                                        <Badge
-                                            variant={checked ? 'default' : 'outline'}
-                                            className={cn(
-                                                'cursor-pointer select-none',
-                                                !checked && 'bg-background/40 hover:bg-background/70'
-                                            )}
-                                        >
-                                            {m}
-                                        </Badge>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
-                <div className="text-[11px] text-muted-foreground/80">{t('apiKey.form.modelsHint')}</div>
             </div>
 
             <div className="flex items-center justify-between pt-1">

@@ -6,7 +6,6 @@ import {
     apiKeyDashboardStatsQueryOptions,
     apiKeyListQueryOptions,
     channelListQueryOptions,
-    groupListQueryOptions,
     modelChannelListQueryOptions,
     modelListQueryOptions,
     statsDailyQueryOptions,
@@ -22,12 +21,10 @@ import { pageImports } from '@/lib/page-preload';
 // 页面和顶栏操作共用 pageImports 中的懒加载模块。
 const Home = lazy(() => pageImports.home().then((module) => ({ default: module.Home })));
 const Channel = lazy(() => pageImports.channel().then((module) => ({ default: module.Channel })));
-const Group = lazy(() => pageImports.group().then((module) => ({ default: module.Group })));
 const Model = lazy(() => pageImports.model().then((module) => ({ default: module.Model })));
 const Log = lazy(() => pageImports.log().then((module) => ({ default: module.Log })));
 const Setting = lazy(() => pageImports.setting().then((module) => ({ default: module.Setting })));
 const ChannelActions = lazy(() => pageImports.channel().then((module) => ({ default: module.ChannelActions })));
-const GroupActions = lazy(() => pageImports.group().then((module) => ({ default: module.GroupActions })));
 const ModelActions = lazy(() => pageImports.model().then((module) => ({ default: module.ModelActions })));
 
 // InitialLoadingGate 在当前界面提交后淡出并移除 HTML 首屏加载动画。
@@ -69,7 +66,6 @@ export function AppContainer() {
             : [
                 queryClient.fetchQuery(apiKeyListQueryOptions),
                 queryClient.fetchQuery(channelListQueryOptions),
-                queryClient.fetchQuery(groupListQueryOptions),
                 queryClient.fetchQuery(modelListQueryOptions),
                 queryClient.fetchQuery(modelChannelListQueryOptions),
                 queryClient.fetchQuery(statsDailyQueryOptions),
@@ -117,7 +113,6 @@ export function AppContainer() {
             actions={
                 <Suspense fallback={null}>
                     {visibleItem === 'channel' && <ChannelActions />}
-                    {visibleItem === 'group' && <GroupActions />}
                     {visibleItem === 'model' && <ModelActions />}
                 </Suspense>
             }
@@ -146,7 +141,6 @@ export function AppContainer() {
                         >
                             {visibleItem === 'home' && <Home />}
                             {visibleItem === 'channel' && <Channel />}
-                            {visibleItem === 'group' && <Group />}
                             {visibleItem === 'model' && <Model />}
                             {visibleItem === 'log' && <Log />}
                             {visibleItem === 'setting' && <Setting />}

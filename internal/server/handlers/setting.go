@@ -150,17 +150,6 @@ func importDB(c *gin.Context) {
 		}
 		seenLLMNames[dump.LLMInfos[i].Name] = struct{}{}
 	}
-	for i := range dump.Groups {
-		if dump.Groups[i].Mode == "" {
-			dump.Groups[i].Mode = model.GroupModeManual
-		}
-		model.NormalizeGroupRelayConfig(&dump.Groups[i].RelayConfig)
-		if dump.Groups[i].Mode != model.GroupModeManual && dump.Groups[i].Mode != model.GroupModeFailover {
-			resp.Error(c, http.StatusBadRequest, "invalid group relay mode")
-			return
-		}
-	}
-
 	result, err := op.DBImportIncremental(c.Request.Context(), &dump)
 	if err != nil {
 		resp.Error(c, http.StatusBadRequest, err.Error())
@@ -186,8 +175,6 @@ func decodeDBDump(body []byte, dump *model.DBDump) error {
 
 	if dump.Version == 0 &&
 		len(dump.Channels) == 0 &&
-		len(dump.Groups) == 0 &&
-		len(dump.GroupItems) == 0 &&
 		len(dump.Settings) == 0 &&
 		len(dump.APIKeys) == 0 &&
 		len(dump.LLMInfos) == 0 &&
