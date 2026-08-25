@@ -75,7 +75,8 @@ type SessionState struct {
 
 var (
 	sessionMu      sync.Mutex                             // sessionMu 保护全部会话状态。
-	sessions       = make(map[string]*SessionState)       // sessions 按会话标识保存状态。
+	sessions       = make(map[string]*SessionState)       // sessions 按规范会话标识保存状态。
+	sessionAliases = make(map[string]string)              // sessionAliases 把备用标识指向规范标识, 使同一会话的多种标识命中同一条状态。
 	sessionStreams = make(map[chan SessionState]struct{}) // 全部会话 SSE 连接。
 )
 
@@ -102,7 +103,7 @@ func identifySession(headers http.Header, body []byte) sessionIdentity {
 		return identity
 	}
 	// 客户端没有任何会话信号时退回内容哈希: 同一会话的系统提示与首条用户消息始终不变, 因此哈希稳定。
-	identity.id, identity.alias = contentSessionID(body)
+	identity.id = contentSessionID(body)
 	return identity
 }
 
@@ -183,28 +184,26 @@ func claudeMetadataSessionID(body []byte) string {
 	return ""
 }
 
-// contentSessionID 由系统提示, 首条用户消息和首条助手消息派生会话标识。
-// 返回的主标识包含助手消息, 备用标识不包含: 会话首轮尚无助手消息, 由此让首轮与后续轮命中同一会话。
+// contentSessionID 由系统提示和首条用户消息派生会话标识。
+// 这两段内容在整个会话里从不变化, 因此标识从首轮到末轮保持一致, 不需要在轮次之间切换标识。
+// 首条助手消息不参与派生: 它只能区分"开头相同但后续分叉"的会话, 而那时绑定早已在本标识下建立, 收益接近于零,
+// 代价却是主标识要在首轮与后续轮之间跳变一次。
 // 必须取到真实的用户输入才派生标识: 仅凭系统提示无法区分会话, 各会话会折叠成同一个而错误地共用绑定。
-func contentSessionID(body []byte) (string, string) {
-	system, user, assistant := conversationHead(body)
+func contentSessionID(body []byte) string {
+	system, user, _ := conversationHead(body)
 	if user == "" {
-		return "", ""
+		return ""
 	}
-	short := contentHash(system, user, "")
-	if assistant == "" {
-		return short, ""
-	}
-	return contentHash(system, user, assistant), short
+	return contentHash(system, user)
 }
 
 // contentHash 将会话开头的文本折叠成短标识。
-func contentHash(system, user, assistant string) string {
+func contentHash(system, user string) string {
 	digest := fnv.New64a()
 	for _, part := range []struct {
 		prefix string
 		text   string
-	}{{"sys:", system}, {"usr:", user}, {"ast:", assistant}} {
+	}{{"sys:", system}, {"usr:", user}} {
 		if part.text != "" {
 			digest.Write([]byte(part.prefix + part.text + "\n"))
 		}
@@ -408,33 +407,76 @@ type sessionTarget struct {
 	modelName string
 }
 
+// resolveSessionLocked 按主标识或备用标识取出会话; 调用方必须持有锁。
+func resolveSessionLocked(id string) *SessionState {
+	if session := sessions[id]; session != nil {
+		return session
+	}
+	if canonical, ok := sessionAliases[id]; ok {
+		return sessions[canonical]
+	}
+	return nil
+}
+
+// linkSessionLocked 把一个备用标识指向已有会话, 使该会话的多种标识都能命中同一条状态; 调用方必须持有锁。
+// 会话对象只在 sessions 中占用规范标识一个键, 备用标识一律走别名表, 由此保证淘汰时不会留下悬空引用。
+func linkSessionLocked(alias string, session *SessionState) {
+	if alias == "" || session == nil || alias == session.ID {
+		return
+	}
+	sessionAliases[alias] = session.ID
+}
+
+// dropSessionLocked 删除会话及其全部备用标识; 调用方必须持有锁。
+func dropSessionLocked(id string) {
+	delete(sessions, id)
+	for alias, canonical := range sessionAliases {
+		if canonical == id {
+			delete(sessionAliases, alias)
+		}
+	}
+}
+
+// sessionForLocked 取出会话, 不存在时按待选状态新建; 调用方必须持有锁。
+// 会话可能因人工清空日志, 数量超限被淘汰或备用标识变化而消失, 这些情况都不该让客户端请求失败,
+// 只该让它重新等待一次人工选择。
+func sessionForLocked(identity sessionIdentity) *SessionState {
+	if session := resolveSessionLocked(identity.id); session != nil {
+		// 主标识首次出现时补上别名, 使后续只携带其中一种标识的请求也能命中。
+		if sessions[identity.id] == nil {
+			linkSessionLocked(identity.id, session)
+		}
+		linkSessionLocked(identity.alias, session)
+		return session
+	}
+	if identity.alias != "" {
+		if session := resolveSessionLocked(identity.alias); session != nil {
+			linkSessionLocked(identity.id, session)
+			return session
+		}
+	}
+	session := &SessionState{
+		ID:        identity.id,
+		Label:     identity.label,
+		Client:    identity.client,
+		Status:    SessionStatusPending,
+		StartedAt: time.Now(),
+		waiters:   make(map[chan struct{}]struct{}),
+	}
+	sessions[identity.id] = session
+	linkSessionLocked(identity.alias, session)
+	return session
+}
+
 // registerSessionRequest 将一次请求登记到其会话, 会话不存在时创建; 返回该会话已绑定的目标。
 // 新会话一律以待选状态出现: 每个会话都必须由人工选择一次渠道和模型, 请求在此之前不会发往上游。
 func registerSessionRequest(identity sessionIdentity, requestedModel string, requestID uint64) sessionTarget {
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
-	session := sessions[identity.id]
-	// 内容哈希兜底时首轮与后续轮的主标识不同, 命中备用标识说明是同一会话的延续, 直接沿用该会话。
-	if session == nil && identity.alias != "" {
-		if aliased := sessions[identity.alias]; aliased != nil {
-			session = aliased
-		}
-	}
-	now := time.Now()
-	if session == nil {
-		session = &SessionState{
-			ID:        identity.id,
-			Label:     identity.label,
-			Client:    identity.client,
-			Status:    SessionStatusPending,
-			StartedAt: now,
-			waiters:   make(map[chan struct{}]struct{}),
-		}
-		sessions[identity.id] = session
-	}
+	session := sessionForLocked(identity)
 	session.RequestedModel = requestedModel
-	session.LastActiveAt = now
+	session.LastActiveAt = time.Now()
 	session.RequestCount++
 	session.requestIDs = append(session.requestIDs, requestID)
 	if len(session.requestIDs) > maxRequestsPerSession {
@@ -449,13 +491,10 @@ func registerSessionRequest(identity sessionIdentity, requestedModel string, req
 
 // awaitSessionTarget 阻塞等待会话绑定上游目标, 期间该会话在前端显示为待选。
 // 返回绑定成功的目标; 客户端断开或等待超时时返回 ok 为 false, err 说明原因。
-func awaitSessionTarget(ctx context.Context, sessionID string) (sessionTarget, bool, error) {
+// 会话状态在等待期间可能被人工清空或淘汰, 此时按待选重新建立而不是让请求失败: 丢失的只是记账, 请求应当重新等待选择。
+func awaitSessionTarget(ctx context.Context, identity sessionIdentity) (sessionTarget, bool, error) {
 	sessionMu.Lock()
-	session := sessions[sessionID]
-	if session == nil {
-		sessionMu.Unlock()
-		return sessionTarget{}, false, fmt.Errorf("session %s not found", sessionID)
-	}
+	session := sessionForLocked(identity)
 	// 已经绑定时无需等待, 直接沿用。
 	if session.ChannelID != 0 {
 		target := sessionTarget{channelID: session.ChannelID, modelName: session.ModelName}
@@ -488,26 +527,25 @@ func awaitSessionTarget(ctx context.Context, sessionID string) (sessionTarget, b
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
-	session = sessions[sessionID]
-	if session == nil {
-		if waitErr == nil {
-			waitErr = fmt.Errorf("session %s was cleared", sessionID)
-		}
-		return sessionTarget{}, false, waitErr
+	// 等待期间会话可能已被替换, 重新解析一次并归还本次的待选计数。
+	current := resolveSessionLocked(identity.id)
+	if current == nil {
+		current = session
 	}
+	delete(current.waiters, waiter)
 	delete(session.waiters, waiter)
-	if session.PendingCount > 0 {
-		session.PendingCount--
+	if current.PendingCount > 0 {
+		current.PendingCount--
 	}
 	// 选择超时后继续保留待选条目, 使随后的人工选择能被客户端重试立即命中。
 	if timedOut {
-		session.pendingUntil = time.Now().Add(sessionPendingLinger)
+		current.pendingUntil = time.Now().Add(sessionPendingLinger)
 	}
-	if session.ChannelID != 0 {
-		publishSessionLocked(session)
-		return sessionTarget{channelID: session.ChannelID, modelName: session.ModelName}, true, nil
+	if current.ChannelID != 0 {
+		publishSessionLocked(current)
+		return sessionTarget{channelID: current.ChannelID, modelName: current.ModelName}, true, nil
 	}
-	publishSessionLocked(session)
+	publishSessionLocked(current)
 	return sessionTarget{}, false, waitErr
 }
 
@@ -523,7 +561,7 @@ func SessionBind(sessionID string, channelID int, modelName string) error {
 	}
 
 	sessionMu.Lock()
-	session := sessions[sessionID]
+	session := resolveSessionLocked(sessionID)
 	if session == nil {
 		sessionMu.Unlock()
 		return fmt.Errorf("session not found")
@@ -555,7 +593,7 @@ func SessionBind(sessionID string, channelID int, modelName string) error {
 // SessionUnbind 解除一个会话的绑定, 该会话的下一条请求重新等待人工选择。
 func SessionUnbind(sessionID string) error {
 	sessionMu.Lock()
-	session := sessions[sessionID]
+	session := resolveSessionLocked(sessionID)
 	if session == nil {
 		sessionMu.Unlock()
 		return fmt.Errorf("session not found")
@@ -583,7 +621,7 @@ func recordSessionFailure(sessionID, reason string) {
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
-	session := sessions[sessionID]
+	session := resolveSessionLocked(sessionID)
 	if session == nil {
 		return
 	}
@@ -603,7 +641,7 @@ func recordSessionSuccess(sessionID string, usage *llm.Usage, metrics model.Stat
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
-	session := sessions[sessionID]
+	session := resolveSessionLocked(sessionID)
 	if session == nil {
 		return
 	}
@@ -655,7 +693,7 @@ func trimSessionsLocked() {
 				dropRequest(requestID)
 			}
 		}
-		delete(sessions, item.id)
+		dropSessionLocked(item.id)
 	}
 }
 
@@ -682,7 +720,7 @@ func SessionClear() {
 		if len(session.waiters) > 0 || session.PendingCount > 0 || session.pendingUntil.After(now) {
 			continue
 		}
-		delete(sessions, id)
+		dropSessionLocked(id)
 	}
 }
 

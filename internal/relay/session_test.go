@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -75,7 +76,9 @@ func TestIdentifySessionExplicitSignals(t *testing.T) {
 	}
 }
 
-// 内容哈希兜底时，同一会话的首轮与后续轮必须落到同一个会话上。
+// 内容哈希兜底时，同一会话的首轮与后续轮必须派生出同一个标识，且后续轮能直接取到首轮建立的绑定。
+// 这里覆盖过的回归是：标识在轮次之间跳变，导致后续轮查不到会话而报 "session ... not found"，
+// 同一个会话在界面上也被劈成两张卡片。
 func TestIdentifySessionContentHashAcrossTurns(t *testing.T) {
 	resetSessions(t)
 
@@ -85,25 +88,34 @@ func TestIdentifySessionContentHashAcrossTurns(t *testing.T) {
 	if first.id == "" {
 		t.Fatal("first turn produced no session id")
 	}
-	if first.alias != "" {
-		t.Fatalf("first turn alias = %q, want empty", first.alias)
-	}
 
 	second := identifySession(http.Header{}, []byte(`{"messages":[
 		{"role":"system","content":"you are a helper"},
 		{"role":"user","content":"first question"},
 		{"role":"assistant","content":"an answer"},
 		{"role":"user","content":"second question"}]}`))
-	if second.alias != first.id {
-		t.Fatalf("second turn alias = %q, want %q", second.alias, first.id)
-	}
-	if second.id == first.id {
-		t.Fatal("second turn primary id should include the assistant message")
+	if second.id != first.id {
+		t.Fatalf("second turn id = %q, want the same as the first turn %q", second.id, first.id)
 	}
 
-	// 首轮登记会话后，后续轮通过备用标识命中同一会话。
+	// 首轮登记并绑定，后续轮必须无需等待就取到同一个目标。
 	registerSessionRequest(first, "claude-opus-5", 1)
+	sessionMu.Lock()
+	session := sessions[first.id]
+	session.ChannelID = 9
+	session.ChannelName = "channel-9"
+	session.ModelName = "real-model"
+	session.Status = SessionStatusBound
+	sessionMu.Unlock()
+
 	registerSessionRequest(second, "claude-opus-5", 2)
+	target, ok, err := awaitSessionTarget(context.Background(), second)
+	if !ok || err != nil {
+		t.Fatalf("second turn could not resolve its session: ok=%v err=%v", ok, err)
+	}
+	if target.channelID != 9 || target.modelName != "real-model" {
+		t.Fatalf("target = %+v, want the binding from the first turn", target)
+	}
 
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
@@ -112,6 +124,80 @@ func TestIdentifySessionContentHashAcrossTurns(t *testing.T) {
 	}
 	if got := sessions[first.id].RequestCount; got != 2 {
 		t.Fatalf("request count = %d, want 2", got)
+	}
+}
+
+// 备用标识与主标识必须命中同一条会话状态，且任一标识都能查到绑定。
+func TestSessionAliasResolvesToSameSession(t *testing.T) {
+	resetSessions(t)
+
+	// prompt_cache_key 与 conversation 互为别名，首次请求同时携带两者。
+	both := identifySession(http.Header{}, []byte(`{"prompt_cache_key":"pck-1","conversation":{"id":"conv-1"},"messages":[
+		{"role":"user","content":"hello"}]}`))
+	if both.id != "pck:pck-1" || both.alias != "conv:conv-1" {
+		t.Fatalf("identity = %+v", both)
+	}
+	registerSessionRequest(both, "claude-opus-5", 1)
+	if err := bindForTest(both.id, 4, "m"); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+
+	// 后续请求只携带 conversation，必须命中同一会话而不是新建一个。
+	onlyConversation := identifySession(http.Header{}, []byte(`{"conversation":{"id":"conv-1"},"messages":[
+		{"role":"user","content":"hello"}]}`))
+	if onlyConversation.id != "conv:conv-1" {
+		t.Fatalf("identity = %+v", onlyConversation)
+	}
+	registerSessionRequest(onlyConversation, "claude-opus-5", 2)
+
+	target, ok, err := awaitSessionTarget(context.Background(), onlyConversation)
+	if !ok || err != nil {
+		t.Fatalf("alias did not resolve: ok=%v err=%v", ok, err)
+	}
+	if target.channelID != 4 {
+		t.Fatalf("target = %+v", target)
+	}
+
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(sessions))
+	}
+}
+
+// 会话记账被清空后，请求必须退化为重新等待选择，而不是直接失败。
+func TestAwaitSessionTargetRecreatesClearedSession(t *testing.T) {
+	resetSessions(t)
+
+	identity := sessionIdentity{id: "claude:gone", label: "已清空", client: SessionClientClaudeCode}
+	registerSessionRequest(identity, "claude-opus-5", 1)
+	SessionClear()
+
+	sessionMu.Lock()
+	cleared := len(sessions) == 0
+	sessionMu.Unlock()
+	if !cleared {
+		t.Fatal("session was not cleared")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, ok, err := awaitSessionTarget(ctx, identity)
+	if ok {
+		t.Fatal("await must not report a binding for a cleared session")
+	}
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the wait to end on the client context, not a missing session", err)
+	}
+
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	session := sessions[identity.id]
+	if session == nil {
+		t.Fatal("await should have recreated the session as pending")
+	}
+	if session.Status != SessionStatusPending || session.Label != "已清空" {
+		t.Fatalf("session = %+v", session)
 	}
 }
 
@@ -150,7 +236,7 @@ func TestAwaitSessionTargetUnblocksOnBind(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		target, ok, _ := awaitSessionTarget(context.Background(), identity.id)
+		target, ok, _ := awaitSessionTarget(context.Background(), identity)
 		done <- outcome{target: target, ok: ok}
 	}()
 
@@ -210,7 +296,7 @@ func TestAwaitSessionTargetClientCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := awaitSessionTarget(ctx, identity.id)
+		_, _, err := awaitSessionTarget(ctx, identity)
 		done <- err
 	}()
 	time.Sleep(20 * time.Millisecond)
@@ -328,9 +414,9 @@ func TestSessionLabelSkipsInjectedBlocks(t *testing.T) {
 // 注入块在每个新会话里完全相同，剔除后不同会话必须派生出不同的内容哈希，否则会共用上一个会话的绑定。
 func TestContentSessionIDDistinguishesNewConversations(t *testing.T) {
 	reminder := `{"type":"text","text":"<system-reminder>\nAs you answer the user's questions, you can use the following context.\n</system-reminder>"}`
-	first, _ := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[` +
+	first := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[` +
 		reminder + `,{"type":"text","text":"第一个会话的问题"}]}]}`))
-	second, _ := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[` +
+	second := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[` +
 		reminder + `,{"type":"text","text":"第二个会话的问题"}]}]}`))
 
 	if first == "" || second == "" {
@@ -343,10 +429,10 @@ func TestContentSessionIDDistinguishesNewConversations(t *testing.T) {
 
 // 只有注入块而没有真实用户输入时不得派生标识，否则全部会话会折叠成同一个并共用绑定。
 func TestContentSessionIDRefusesWithoutRealUserInput(t *testing.T) {
-	id, alias := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[
+	id := contentSessionID([]byte(`{"system":"You are Claude Code","messages":[{"role":"user","content":[
 		{"type":"text","text":"<system-reminder>\nAs you answer the user's questions.\n</system-reminder>"}]}]}`))
-	if id != "" || alias != "" {
-		t.Fatalf("ids = (%q, %q), want empty", id, alias)
+	if id != "" {
+		t.Fatalf("id = %q, want empty", id)
 	}
 }
 
@@ -362,4 +448,24 @@ func TestClaudeMetadataSessionIDVariants(t *testing.T) {
 			t.Fatalf("body %s -> %q, want %q", body, got, want)
 		}
 	}
+}
+
+// bindForTest 直接在会话状态上建立绑定，避开对渠道缓存的依赖。
+func bindForTest(sessionID string, channelID int, modelName string) error {
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+
+	session := resolveSessionLocked(sessionID)
+	if session == nil {
+		return errors.New("session not found")
+	}
+	session.ChannelID = channelID
+	session.ChannelName = "channel"
+	session.ModelName = modelName
+	session.Status = SessionStatusBound
+	for waiter := range session.waiters {
+		close(waiter)
+		delete(session.waiters, waiter)
+	}
+	return nil
 }

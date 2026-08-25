@@ -82,7 +82,7 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			config := op.RelayConfigGet()
 
 			// 尚未绑定时阻塞等待人工选择, 期间该会话在前端显示为待选。
-			target, ok, waitErr := awaitSessionTarget(ctx, sessionID)
+			target, ok, waitErr := awaitSessionTarget(ctx, identity)
 			if !ok {
 				if ctx.Err() != nil {
 					request.markCanceled(clientCanceledReason, "", nil)
