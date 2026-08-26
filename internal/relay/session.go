@@ -31,8 +31,8 @@ const (
 	sessionSelectTimeout  = 60 * time.Second // 单个请求等待人工选择目标的上限, 超时后该请求以明确错误失败。
 	sessionPendingLinger  = 5 * time.Minute  // 选择超时后待选条目继续保留的时长, 使客户端重试能命中随后的人工选择。
 	sessionStreamBuffer   = 16               // 单个会话流连接的非阻塞消息缓冲容量。
-	maxSessions           = 20               // 进程内最多保留的会话数量。
-	maxRequestsPerSession = 200              // 单个会话最多保留的请求数量。
+	maxSessions           = 10               // 进程内最多保留的会话数量。
+	maxRequestsPerSession = 50               // 单个会话最多保留的请求数量。
 	sessionLabelRuneLimit = 40               // 可读标签取用首条用户消息的字符数上限。
 	sessionHashTextLimit  = 100              // 内容哈希取用单段文本的字符数上限。
 )
