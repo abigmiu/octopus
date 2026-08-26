@@ -42,8 +42,12 @@ jobs:
         run: |
           VERSION=$(grep '^// Version ' main.go | sed 's|^// Version ||' | tr -d ' ')
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          git tag "${VERSION}"
-          git push origin "${VERSION}"
+          if [ "$(git rev-parse -q --verify "refs/tags/${VERSION}")" ]; then
+            echo "tag ${VERSION} already exists (refs/tags/${VERSION}), skipping creation"
+          else
+            git tag "${VERSION}"
+            git push origin "${VERSION}"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
