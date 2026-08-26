@@ -97,10 +97,10 @@ export function Log() {
                     overscan={4}
                     getItemKey={(bucket) => `session-${bucket.key}`}
                     scrollToKey={focusSessionId ? `session-${focusSessionId}` : null}
-                    renderItem={(bucket, index) => {
-                        // 等待选择渠道、通知定位过来和最近活跃的会话默认展开，其余保持折叠。
+                    renderItem={(bucket) => {
+                        // 默认收起请求，仅通知定位过来时才默认展开。
                         const focused = focusSessionId === bucket.key;
-                        const defaultExpanded = focused || bucket.session?.status === 'pending' || index === 0;
+                        const defaultExpanded = focused;
                         const collapsed = collapsedOverrides[bucket.key];
                         return (
                             <SessionCard
