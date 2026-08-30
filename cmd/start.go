@@ -4,6 +4,7 @@ import (
 	"github.com/bestruirui/octopus/internal/conf"
 	"github.com/bestruirui/octopus/internal/db"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/bestruirui/octopus/internal/relay"
 	"github.com/bestruirui/octopus/internal/server"
 	"github.com/bestruirui/octopus/internal/task"
 	"github.com/bestruirui/octopus/internal/utils/shutdown"
@@ -30,6 +31,7 @@ var startCmd = &cobra.Command{
 			return
 		}
 		shutdown.Register(db.Close)
+		relay.InitBodyStore()
 
 		if err := op.InitCache(); err != nil {
 			log.Errorf("cache init error: %v", err)

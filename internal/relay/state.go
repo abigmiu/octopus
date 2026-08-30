@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"os"
 	"slices"
 	"sort"
 	"sync"
@@ -62,8 +63,6 @@ type RequestState struct {
 
 	Rounds []RoundRecord `json:"rounds,omitempty"` // 全部轮次的结果, 按轮次升序。
 
-	body         string             // 客户端原始请求体, 体积大故不进状态流, 由独立接口按需拉取。
-	responseBody string             // 聚合后的完整最终响应体, 同样按需拉取。
 	apiKeyID     int                // 发起请求的 API Key ID, 用于请求完成后的归属统计。
 	cancel       context.CancelFunc // 中止最新一轮上游请求, 仅在该轮等待响应期间非空。
 	roundStarted time.Time          // 最新一轮的开始时间, 用于结束时计算耗时。
@@ -79,16 +78,19 @@ var (
 )
 
 // newRequestState 分配请求 ID 并登记初始运行状态; 返回的记录是本请求后续全部状态写入的入口。
+// 请求体不驻留内存, 直接落盘, 由请求体接口按需读取。
 func newRequestState(model, body string, apiKeyID int) *RequestState {
+	id := idSeq.Add(1)
+	saveRequestBody(id, body)
+
 	mu.Lock()
 	defer mu.Unlock()
 
 	request := &RequestState{
-		ID:        idSeq.Add(1),
+		ID:        id,
 		Status:    StatusRunning,
 		StartedAt: time.Now(),
 		Model:     model,
-		body:      body,
 		apiKeyID:  apiKeyID,
 	}
 	requests[request.ID] = request
@@ -177,14 +179,18 @@ func interruptSending(ids []uint64) {
 	}
 }
 
-// dropRequest 删除一条已结束的请求记录, 由会话侧按会话容量上限调用; 仍在进行的请求不会被删除。
+// dropRequest 删除一条已结束的请求记录并清理其落盘文件, 由会话侧按会话容量上限调用; 仍在进行的请求不会被删除。
 func dropRequest(id uint64) {
 	mu.Lock()
-	defer mu.Unlock()
-
-	if request := requests[id]; request != nil && request.Status != StatusRunning && request.Status != StatusCommitted {
-		delete(requests, id)
+	request := requests[id]
+	if request == nil || request.Status == StatusRunning || request.Status == StatusCommitted {
+		mu.Unlock()
+		return
 	}
+	delete(requests, id)
+	mu.Unlock()
+
+	deleteBodyFiles(id)
 }
 
 // wait 在重新选择目标之前退避 seconds 秒; 客户端在退避期间断开时以取消终态定稿并返回 false。
@@ -209,40 +215,36 @@ func (r *RequestState) markCommitted() {
 
 // markSucceeded 以成功终态定稿请求。
 func (r *RequestState) markSucceeded(responseBody string, usage *llm.Usage) {
+	saveResponseBody(r.ID, responseBody)
 	mu.Lock()
 	defer mu.Unlock()
 
 	r.Status = StatusSuccess
 	r.Error = ""
 	r.CancelReason = ""
-	r.responseBody = responseBody
 	r.finishLocked(usage)
 }
 
 // markFailed 以失败终态定稿请求, 最终错误取自本次失败原因。
 func (r *RequestState) markFailed(err error, responseBody string, usage *llm.Usage) {
+	saveResponseBody(r.ID, responseBody)
 	mu.Lock()
 	defer mu.Unlock()
 
 	r.Status = StatusFailed
 	r.Error = err.Error()
-	if responseBody != "" {
-		r.responseBody = responseBody
-	}
 	r.finishLocked(usage)
 }
 
 // markCanceled 以取消终态定稿请求, 用于客户端提前断开或主动取消。
 // 取消原因单独记录, 不覆盖此前各轮的真实失败原因, 否则重试过程中的上游错误会全部丢失。
 func (r *RequestState) markCanceled(reason string, responseBody string, usage *llm.Usage) {
+	saveResponseBody(r.ID, responseBody)
 	mu.Lock()
 	defer mu.Unlock()
 
 	r.Status = StatusCanceled
 	r.CancelReason = reason
-	if responseBody != "" {
-		r.responseBody = responseBody
-	}
 	r.finishLocked(usage)
 }
 
@@ -344,29 +346,29 @@ func CloseRequestStream(stream chan RequestState) {
 	}
 }
 
-// RequestBody 返回指定请求保存的原始请求体, 记录不存在时返回空串。
+// RequestBody 返回指定请求保存的原始请求体, 记录不存在或文件读取失败时返回空串。
 func RequestBody(id uint64) string {
 	mu.Lock()
-	defer mu.Unlock()
-
-	if request := requests[id]; request != nil {
-		return request.body
+	if request := requests[id]; request == nil {
+		mu.Unlock()
+		return ""
 	}
-	return ""
+	mu.Unlock()
+	return readRequestBody(id)
 }
 
-// ResponseBody 返回指定请求当前保存的响应体, 记录不存在或响应未完成时返回空串。
+// ResponseBody 返回指定请求当前保存的响应体, 记录不存在、响应未完成或文件读取失败时返回空串。
 func ResponseBody(id uint64) string {
 	mu.Lock()
-	defer mu.Unlock()
-
-	if request := requests[id]; request != nil {
-		return request.responseBody
+	if request := requests[id]; request == nil {
+		mu.Unlock()
+		return ""
 	}
-	return ""
+	mu.Unlock()
+	return readResponseBody(id)
 }
 
-// Clear 删除全部已结束的请求记录及其所属的空闲会话。
+// Clear 删除全部已结束的请求记录及其所属的空闲会话, 并清空落盘目录。
 func Clear() {
 	mu.Lock()
 	for id, request := range requests {
@@ -377,4 +379,7 @@ func Clear() {
 	mu.Unlock()
 
 	SessionClear()
+	if bodyDir != "" {
+		_ = os.RemoveAll(bodyDir)
+	}
 }

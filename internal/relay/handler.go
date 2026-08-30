@@ -11,6 +11,7 @@ import (
 
 	"github.com/bestruirui/octopus/internal/model"
 	"github.com/bestruirui/octopus/internal/op"
+	"github.com/charmbracelet/log"
 	"github.com/gin-contrib/sse"
 	"github.com/gin-gonic/gin"
 	"github.com/looplj/axonhub/llm"
@@ -53,6 +54,13 @@ func Forward(format llm.APIFormat) gin.HandlerFunc {
 			rejectRequest(c, inbound, err)
 			return
 		}
+
+		log.Debug("relay request received",
+			"path", c.Request.URL.Path,
+			"format", format,
+			"model", metadata.Model,
+			"streaming", metadata.Streaming,
+			"body", truncateForLog(raw.Body))
 
 		// 会话身份由客户端信号或请求内容派生, 是本请求唯一的选路依据。
 		identity := identifySession(c.Request.Header, raw.Body)
@@ -310,4 +318,13 @@ func rejectRequest(c *gin.Context, inbound transformer.Inbound, err error) {
 	})
 	c.Data(response.StatusCode, "application/json", response.Body)
 	c.Abort()
+}
+
+// 日志里只读请求体开头一段, 避免把完整对话内容刷进日志。
+func truncateForLog(body []byte) string {
+	const cap = 1024
+	if len(body) <= cap {
+		return string(body)
+	}
+	return string(body[:cap]) + "...(truncated)"
 }
