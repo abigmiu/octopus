@@ -12,67 +12,28 @@ readonly LDFLAGS="-X 'github.com/bestruirui/${APP_NAME}/internal/conf.Version=${
                   -s -w" # 注入版本信息并缩小发布二进制。
 
 build_standard() {
-    # 标准矩阵直接使用 GOOS/GOARCH，arm 固定输出 ARMv7 指令集。
     local os go_arch
     IFS=: read -r os go_arch <<<"$1"
-    local build_env=(GOOS="${os}" GOARCH="${go_arch}" CGO_ENABLED=0)
-    if [ "${go_arch}" = "arm" ]; then
-        build_env+=(GOARM=7)
-    fi
     echo "Building ${os}/${go_arch}"
-    env "${build_env[@]}" go build -trimpath -o "${OUTPUT_DIR}/bin/${APP_NAME}-${os}-${go_arch}" -ldflags="${LDFLAGS}" -tags=jsoniter .
-}
-
-build_android() {
-    # Android 矩阵显式绑定 NDK API 21 编译器，脚本只面向 workflow 的 Ubuntu runner。
-    local go_arch compiler
-    IFS=: read -r go_arch compiler <<<"$1"
-    local build_env=(GOOS=android GOARCH="${go_arch}" CGO_ENABLED=1 \
-        CC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${compiler}")
-    if [ "${go_arch}" = "arm" ]; then
-        build_env+=(GOARM=7)
-    fi
-    echo "Building android/${go_arch}"
-    env "${build_env[@]}" go build -trimpath -o "${OUTPUT_DIR}/bin/${APP_NAME}-android-${go_arch}" -ldflags="${LDFLAGS}" -tags=jsoniter .
+    env GOOS="${os}" GOARCH="${go_arch}" CGO_ENABLED=0 \
+        go build -trimpath -o "${OUTPUT_DIR}/bin/${APP_NAME}-${os}-${go_arch}" -ldflags="${LDFLAGS}" -tags=jsoniter .
 }
 
 readonly -a STANDARD_TARGETS=(
     "linux:amd64"
-    "linux:arm64"
-    "linux:arm"
-    "linux:386"
-    "windows:amd64"
-    "darwin:arm64"
-    "darwin:amd64"
-) # 不依赖 cgo 的固定发布矩阵。
-readonly -a ANDROID_TARGETS=(
-    "amd64:x86_64-linux-android21-clang"
-    "arm64:aarch64-linux-android21-clang"
-    "arm:armv7a-linux-androideabi21-clang"
-    "386:i686-linux-android21-clang"
-) # Android API 21 的固定 ABI 与 NDK clang 映射。
-
-: "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME is required}"
+) # 仅 Linux amd64 的发布矩阵。
 
 # 构建工具不会创建父目录，因此只保留一次直接创建。
-mkdir -p "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/archives" \
-    "${OUTPUT_DIR}/docker/linux/amd64" "${OUTPUT_DIR}/docker/linux/386" \
-    "${OUTPUT_DIR}/docker/linux/arm/v7" "${OUTPUT_DIR}/docker/linux/arm64"
+mkdir -p "${OUTPUT_DIR}/bin" "${OUTPUT_DIR}/archives" "${OUTPUT_DIR}/docker/linux/amd64"
 rm -f "${OUTPUT_DIR}"/bin/"${APP_NAME}"-* "${OUTPUT_DIR}"/archives/*.zip "${OUTPUT_DIR}/archives/SHA256SUMS"
 
 echo "Building ${APP_NAME} ${VERSION} (${COMMIT})"
 for target in "${STANDARD_TARGETS[@]}"; do
     build_standard "${target}"
 done
-for target in "${ANDROID_TARGETS[@]}"; do
-    build_android "${target}"
-done
 
 # Docker buildx 按 TARGETPLATFORM 读取固定目录中的同名可执行文件。
 cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-amd64" "${OUTPUT_DIR}/docker/linux/amd64/${APP_NAME}"
-cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-386" "${OUTPUT_DIR}/docker/linux/386/${APP_NAME}"
-cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-arm" "${OUTPUT_DIR}/docker/linux/arm/v7/${APP_NAME}"
-cp "${OUTPUT_DIR}/bin/${APP_NAME}-linux-arm64" "${OUTPUT_DIR}/docker/linux/arm64/${APP_NAME}"
 
 # 每个平台只替换可执行文件名，许可证报告和发布文档保持一致。
 GOFLAGS="-tags=jsoniter" go run github.com/google/go-licenses/v2@v2.0.1 report . \
@@ -80,13 +41,9 @@ GOFLAGS="-tags=jsoniter" go run github.com/google/go-licenses/v2@v2.0.1 report .
 cp README.md LICENSE "${OUTPUT_DIR}/THIRD_PARTY_LICENSES.csv" "${OUTPUT_DIR}/archives/"
 for file in "${OUTPUT_DIR}"/bin/"${APP_NAME}"-*; do
     archive_name="$(basename "${file}").zip"
-    executable_name="${APP_NAME}"
-    if [[ "${file}" == *-windows-* ]]; then
-        executable_name="${APP_NAME}.exe"
-    fi
-    cp "${file}" "${OUTPUT_DIR}/archives/${executable_name}"
-    (cd "${OUTPUT_DIR}/archives" && zip -q "${archive_name}" "${executable_name}" README.md LICENSE THIRD_PARTY_LICENSES.csv)
-    rm -f "${OUTPUT_DIR:?}/archives/${executable_name}"
+    cp "${file}" "${OUTPUT_DIR}/archives/${APP_NAME}"
+    (cd "${OUTPUT_DIR}/archives" && zip -q "${archive_name}" "${APP_NAME}" README.md LICENSE THIRD_PARTY_LICENSES.csv)
+    rm -f "${OUTPUT_DIR:?}/archives/${APP_NAME}"
 done
 rm -f "${OUTPUT_DIR:?}/archives/README.md" "${OUTPUT_DIR}/archives/LICENSE" \
     "${OUTPUT_DIR}/archives/THIRD_PARTY_LICENSES.csv"
