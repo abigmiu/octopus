@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/looplj/axonhub/llm/transformer/anthropic"
 	"github.com/looplj/axonhub/llm/transformer/openai"
 	"github.com/looplj/axonhub/llm/transformer/openai/responses"
+	"github.com/tidwall/sjson"
 )
 
 // upstreamResponse 是已验证但尚未写给客户端的上游成功响应; events 为 nil 表示非流式响应。
@@ -187,6 +189,16 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		inbound = openai.NewInboundTransformer()
 	}
 
+	// Codex 把工具声明放在 input[].additional_tools, 跨协议转换器不识别这类 item 会整体丢弃;
+	// 提前提取并提升到顶层 tools 才能让下游拿到工具。custom 工具也一并降级为 function。
+	if format == llm.APIFormatOpenAIResponse {
+		normalized, err := normalizeResponsesTools(raw.Body)
+		if err != nil {
+			return nil, err
+		}
+		raw.Body = normalized
+	}
+
 	client, err := helper.ChannelHttpClient(&channel)
 	if err != nil {
 		return nil, err
@@ -242,4 +254,120 @@ func sendConverted(ctx context.Context, format llm.APIFormat, raw *httpclient.Re
 		return nil, fmt.Errorf("upstream did not respond within %s: %w", firstResponseTimeout, err)
 	}
 	return nil, err
+}
+
+// normalizeResponsesTools 处理 Codex 风格的 Responses 请求: 把 input 中 additional_tools 声明的
+// 工具目录提升到顶层 tools, 展开 namespace, 并把 custom 工具降级为 function。
+// 跨协议转换(如 Responses->Anthropic)时, 不处理这些工具会被 axonhub 转换器整体丢弃。
+func normalizeResponsesTools(body []byte) ([]byte, error) {
+	var payload struct {
+		Input []json.RawMessage `json:"input"`
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+
+	var promoted []json.RawMessage
+	for _, itemRaw := range payload.Input {
+		var item struct {
+			Type  string            `json:"type"`
+			Tools []json.RawMessage `json:"tools"`
+		}
+		if err := json.Unmarshal(itemRaw, &item); err != nil || item.Type != "additional_tools" {
+			continue
+		}
+		for _, toolRaw := range item.Tools {
+			var tool struct {
+				Type  string            `json:"type"`
+				Name  string            `json:"name"`
+				Tools []json.RawMessage `json:"tools"`
+			}
+			if err := json.Unmarshal(toolRaw, &tool); err != nil {
+				continue
+			}
+			switch tool.Type {
+			case "namespace":
+				promoted = append(promoted, expandNamespaceTool(tool.Name, tool.Tools)...)
+			case "function":
+				promoted = append(promoted, toolRaw)
+			case "custom":
+				if downgraded, err := downgradeCustomTool(toolRaw, tool.Name); err == nil {
+					promoted = append(promoted, downgraded)
+				}
+			}
+		}
+	}
+	if len(promoted) == 0 {
+		return body, nil
+	}
+
+	merged := append(payload.Tools, promoted...)
+	mergedRaw, err := json.Marshal(merged)
+	if err != nil {
+		return nil, err
+	}
+	return sjson.SetRawBytes(body, "tools", mergedRaw)
+}
+
+// expandNamespaceTool 把 namespace 子工具展开为 namespace__name 的顶层工具, custom 子工具降级为 function。
+func expandNamespaceTool(namespace string, subTools []json.RawMessage) []json.RawMessage {
+	var out []json.RawMessage
+	for _, subRaw := range subTools {
+		var sub struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(subRaw, &sub); err != nil || sub.Name == "" {
+			continue
+		}
+		switch sub.Type {
+		case "function":
+			var m map[string]any
+			if err := json.Unmarshal(subRaw, &m); err != nil {
+				continue
+			}
+			m["name"] = namespace + "__" + sub.Name
+			if raw, err := json.Marshal(m); err == nil {
+				out = append(out, raw)
+			}
+		case "custom":
+			if raw, err := downgradeCustomTool(subRaw, namespace+"__"+sub.Name); err == nil {
+				out = append(out, raw)
+			}
+		}
+	}
+	return out
+}
+
+// downgradeCustomTool 把 Responses custom 工具降级为 function 工具: grammar 移入描述, 参数固定为 input 字符串。
+// 上游(含 Anthropic 与多数 Responses 网关)只识别 function 工具, 否则 custom 会被静默丢弃。
+func downgradeCustomTool(toolRaw json.RawMessage, name string) (json.RawMessage, error) {
+	var tool struct {
+		Description string `json:"description"`
+		Format      *struct {
+			Definition string `json:"definition"`
+		} `json:"format"`
+	}
+	if err := json.Unmarshal(toolRaw, &tool); err != nil {
+		return nil, err
+	}
+	desc := tool.Description
+	if tool.Format != nil && tool.Format.Definition != "" {
+		if desc != "" {
+			desc += "\n"
+		}
+		desc += "Original grammar is advisory: " + tool.Format.Definition
+	}
+	return json.Marshal(map[string]any{
+		"type":        "function",
+		"name":        name,
+		"description": desc,
+		"parameters": map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{"input": map[string]any{"type": "string"}},
+			"required":             []string{"input"},
+			"additionalProperties": false,
+		},
+	})
 }
