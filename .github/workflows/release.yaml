@@ -87,7 +87,7 @@ jobs:
         run: bash scripts/build.sh
 
       - name: Generate changelog
-        run: npx changelogithub --tag "${{ steps.version.outputs.version }}"
+        run: npx changelogithub --to "${{ steps.version.outputs.version }}"
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
